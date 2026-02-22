@@ -36,3 +36,14 @@ services:
       backend:
         condition: service_started
     command: bash -lc "python -m app.worker"
+
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
