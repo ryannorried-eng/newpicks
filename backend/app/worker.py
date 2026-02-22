@@ -11,6 +11,7 @@ from app.models.sport import Sport
 from app.services.polling_scheduler import scheduler
 from app.tasks.fetch_odds import fetch_odds_adaptive, sync_sports
 from app.tasks.generate_picks import run_generate_picks
+from app.tasks.generate_parlays import run_generate_parlays
 
 client = OddsAPIClient()
 
@@ -44,6 +45,10 @@ async def run_fetch_odds() -> None:
 async def run_generate_picks_task() -> None:
     await run_generate_picks()
 
+
+async def run_generate_parlays_task() -> None:
+    await run_generate_parlays()
+
 async def main() -> None:
     await startup_sync()
     await check_daily_schedule()
@@ -53,6 +58,7 @@ async def main() -> None:
     sched.add_job(check_daily_schedule, "interval", hours=1)
     sched.add_job(run_fetch_odds, "interval", minutes=10)
     sched.add_job(run_generate_picks_task, "cron", hour=13, minute=0)
+    sched.add_job(run_generate_parlays_task, "cron", hour=13, minute=15)
     sched.start()
 
     while True:

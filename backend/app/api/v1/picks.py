@@ -11,6 +11,7 @@ from app.models.game import Game
 from app.models.pick import Pick
 from app.schemas.picks import PickResponse
 from app.tasks.generate_picks import run_generate_picks
+from app.tasks.generate_parlays import run_generate_parlays
 
 router = APIRouter(prefix="/picks", tags=["picks"])
 
@@ -48,6 +49,8 @@ async def _serialize_pick(session: AsyncSession, pick: Pick) -> PickResponse:
 @router.post("/generate")
 async def trigger_generate_picks() -> dict[str, int]:
     created = await run_generate_picks()
+    if created > 0:
+        await run_generate_parlays()
     return {"generated": created}
 
 
