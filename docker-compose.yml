@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: sharppicks
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sharppicks"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sharppicks
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: bash -lc "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sharppicks
+      ODDS_API_KEY: ${ODDS_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: bash -lc "python -m app.worker"
