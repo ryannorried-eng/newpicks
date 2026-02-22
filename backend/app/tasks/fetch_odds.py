@@ -10,7 +10,7 @@ from app.models.game import Game
 from app.models.odds_snapshot import OddsSnapshot
 from app.models.sport import Sport
 from app.services.polling_scheduler import scheduler
-from app.utils.odds_math import american_to_implied_prob
+from app.utils.odds_math import american_to_implied_prob, remove_vig
 
 
 async def sync_sports(client: OddsAPIClient, session: AsyncSession) -> None:
@@ -52,11 +52,15 @@ async def _store_odds_payload(session: AsyncSession, sport_id: int, sport_key: s
 
         for bookmaker in game_data.get("bookmakers", []):
             for market in bookmaker.get("markets", []):
-                for outcome in market.get("outcomes", []):
+                outcomes = market.get("outcomes", [])
+                implied_probs = [american_to_implied_prob(int(outcome.get("price", 0))) if outcome.get("price") else 0.0 for outcome in outcomes]
+                total_implied = sum(implied_probs)
+                no_vig_probs = remove_vig(implied_probs) if total_implied > 0 else implied_probs
+
+                for outcome, implied, no_vig in zip(outcomes, implied_probs, no_vig_probs):
                     side = outcome.get("name", "unknown").lower()
                     odds = int(outcome.get("price", 0))
                     line = outcome.get("point")
-                    implied = american_to_implied_prob(odds) if odds else 0.0
                     existing_stmt: Select[tuple[OddsSnapshot]] = (
                         select(OddsSnapshot)
                         .where(
@@ -81,7 +85,7 @@ async def _store_odds_payload(session: AsyncSession, sport_id: int, sport_key: s
                         line=line,
                         odds=odds,
                         implied_prob=implied,
-                        no_vig_prob=implied,
+                        no_vig_prob=no_vig,
                         commence_time=commence,
                         snapshot_time=now,
                         snapshot_time_rounded=now.replace(second=0, microsecond=0),
