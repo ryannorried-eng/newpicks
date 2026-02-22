@@ -98,6 +98,11 @@ async def generate_model_picks(session: AsyncSession, games: list[Game], today_s
 
     generated: list[Pick] = []
     nba_client = NBAStatsClient()
+    seasons = {g.commence_time.date().year for g in games}
+    for season in seasons:
+        if not await nba_client.get_team_stats(season, use_cache=True):
+            logger.info("Skipping model picks: missing cached team stats for season %s", season)
+            return []
 
     for game in games:
         snapshots = (

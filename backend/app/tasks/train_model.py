@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import pickle
@@ -10,7 +11,7 @@ from typing import Any
 import numpy as np
 from sqlalchemy import and_, select
 
-from app.data_providers.nba_stats import NBAStatsClient
+from app.data_providers.nba_stats import NBAStatsClient, TEAM_STATS_CACHE_PATH
 from app.database import AsyncSessionLocal
 from app.ml.features import build_game_features, features_to_array
 from app.ml.model import predictor
@@ -19,6 +20,29 @@ from app.models.sport import Sport
 
 CACHE_PATH = os.environ.get("TRAINING_CACHE_PATH", "/app/models/nba_training_cache.pkl")
 logger = logging.getLogger(__name__)
+
+def _write_team_stats_cache(season: int, stats: list[dict[str, Any]]) -> None:
+    if not stats:
+        return
+    os.makedirs(os.path.dirname(TEAM_STATS_CACHE_PATH), exist_ok=True)
+    payload: dict[str, Any] = {"seasons": {}, "cached_at": datetime.now(UTC).isoformat()}
+    if os.path.exists(TEAM_STATS_CACHE_PATH):
+        try:
+            with open(TEAM_STATS_CACHE_PATH, "r", encoding="utf-8") as file:
+                existing = json.load(file)
+            if isinstance(existing, dict):
+                payload.update(existing)
+                payload["seasons"] = existing.get("seasons", {}) if isinstance(existing.get("seasons"), dict) else {}
+        except Exception:
+            logger.exception("Failed to read existing team stats cache at %s", TEAM_STATS_CACHE_PATH)
+
+    payload["seasons"][str(season)] = stats
+    payload["team_stats"] = stats
+    payload["cached_at"] = datetime.now(UTC).isoformat()
+
+    with open(TEAM_STATS_CACHE_PATH, "w", encoding="utf-8") as file:
+        json.dump(payload, file)
+    logger.info("Wrote team stats cache for season %s to %s", season, TEAM_STATS_CACHE_PATH)
 
 
 async def collect_training_data(
@@ -34,6 +58,10 @@ async def collect_training_data(
 
     X: list[list[float]] = []
     y: list[int] = []
+
+    for season in seasons:
+        season_stats = await nba_client.get_team_stats(season, use_cache=False)
+        _write_team_stats_cache(season, season_stats)
 
     async with AsyncSessionLocal() as session:
         nba_sport = await session.scalar(select(Sport).where(Sport.key == "basketball_nba"))

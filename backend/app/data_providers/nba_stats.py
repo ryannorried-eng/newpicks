@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -9,6 +11,28 @@ import pandas as pd
 from nba_api.stats.endpoints import leaguegamefinder, leaguestandings, teamestimatedmetrics
 from nba_api.stats.library.parameters import SeasonTypeAllStar
 from nba_api.stats.static import teams
+
+TEAM_STATS_CACHE_PATH = os.environ.get("TEAM_STATS_CACHE_PATH", "/app/models/team_stats_cache.json")
+TEAM_NAME_ALIASES = {
+    "la clippers": "Los Angeles Clippers",
+    "los angeles clippers": "Los Angeles Clippers",
+    "la lakers": "Los Angeles Lakers",
+    "los angeles lakers": "Los Angeles Lakers",
+}
+
+
+def normalize_team_name(team_name: str) -> str:
+    cleaned = str(team_name or "").strip()
+    if not cleaned:
+        return ""
+    alias = TEAM_NAME_ALIASES.get(cleaned.lower())
+    return alias if alias is not None else cleaned
+
+
+def team_last_word(team_name: str) -> str:
+    normalized = normalize_team_name(team_name)
+    parts = normalized.split()
+    return parts[-1].lower() if parts else ""
 
 
 class NBAStatsClient:
@@ -36,7 +60,7 @@ class NBAStatsClient:
         by_name: dict[str, dict[str, Any]] = {}
         for team in static_teams:
             tid = int(team["id"])
-            full_name = str(team["full_name"])
+            full_name = normalize_team_name(str(team["full_name"]))
             info = {
                 "team_id": tid,
                 "team_name": full_name,
@@ -46,6 +70,7 @@ class NBAStatsClient:
             }
             cache[tid] = info
             by_name[full_name.lower()] = info
+            by_name[team_last_word(full_name)] = info
 
         self._team_cache = cache
         self._team_name_cache = by_name
@@ -94,9 +119,37 @@ class NBAStatsClient:
             return []
         return df.to_dict(orient="records")
 
-    async def get_team_stats(self, season: int) -> list[dict]:
+    def _load_team_stats_cache(self, season: int) -> list[dict[str, Any]]:
+        if not os.path.exists(TEAM_STATS_CACHE_PATH):
+            return []
+        try:
+            with open(TEAM_STATS_CACHE_PATH, "r", encoding="utf-8") as file:
+                payload = json.load(file)
+        except Exception:
+            self._logger.exception("Failed reading team stats cache at %s", TEAM_STATS_CACHE_PATH)
+            return []
+
+        seasons_payload = payload.get("seasons") if isinstance(payload, dict) else None
+        if isinstance(seasons_payload, dict):
+            season_payload = seasons_payload.get(str(season), [])
+            if isinstance(season_payload, list):
+                return season_payload
+
+        fallback = payload.get("team_stats", []) if isinstance(payload, dict) else []
+        return fallback if isinstance(fallback, list) else []
+
+    async def get_team_stats(self, season: int, use_cache: bool = True) -> list[dict]:
         if season in self._season_stats_cache:
             return self._season_stats_cache[season]
+
+        if use_cache:
+            cached_stats = self._load_team_stats_cache(season)
+            if cached_stats:
+                self._season_stats_cache[season] = cached_stats
+                self._logger.info("Loaded %s teams from stats cache for season %s", len(cached_stats), season)
+                return cached_stats
+            self._logger.info("No cached team stats found for season %s at %s", season, TEAM_STATS_CACHE_PATH)
+            return []
 
         await self._load_teams()
         season_str = await self._season_str(season)
@@ -140,7 +193,7 @@ class NBAStatsClient:
             stats.append(
                 {
                     "team_id": team_id,
-                    "team_name": team_info["team_name"],
+                    "team_name": normalize_team_name(team_info["team_name"]),
                     "abbreviation": team_info["abbreviation"],
                     "wins": int(row.get("WINS", 0)),
                     "losses": int(row.get("LOSSES", 0)),
