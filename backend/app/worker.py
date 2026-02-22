@@ -14,9 +14,12 @@ from app.tasks.generate_picks import run_generate_picks
 from app.tasks.generate_parlays import run_generate_parlays
 from app.tasks.settle import run_settlement_pipeline
 from app.tasks.capture_closing_lines import capture_closing_lines
+from app.tasks.train_model import run_model_training
+from app.data_providers.nba_stats import NBAStatsClient
 from sqlalchemy import text
 
 client = OddsAPIClient()
+nba_client = NBAStatsClient()
 
 
 async def check_daily_schedule() -> None:
@@ -43,6 +46,9 @@ async def run_fetch_odds() -> None:
         await fetch_odds_adaptive(client, session)
 
 
+
+async def run_model_training_task() -> None:
+    await run_model_training(nba_client)
 
 
 async def run_generate_picks_task() -> None:
@@ -78,6 +84,7 @@ async def main() -> None:
     sched.add_job(run_fetch_odds, "interval", minutes=10)
     sched.add_job(run_capture_closing_lines_task, "interval", minutes=10)
     sched.add_job(run_settlement_pipeline_task, "interval", minutes=30)
+    sched.add_job(run_model_training_task, "cron", day_of_week="sun", hour=8, minute=0)
     sched.add_job(run_generate_picks_task, "cron", hour=13, minute=0)
     sched.add_job(run_generate_parlays_task, "cron", hour=13, minute=15)
     sched.start()
