@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass
 from datetime import date
 
-from app.data_providers.nba_stats import NBAStatsClient
+from app.data_providers.nba_stats import NBAStatsClient, normalize_team_name, team_last_word
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -34,15 +37,31 @@ class GameFeatures:
     is_home: float = 1.0
 
 
+def _resolve_team_stats(team_name: str, by_name: dict[str, dict], by_last_word: dict[str, dict]) -> dict | None:
+    normalized = normalize_team_name(team_name)
+    direct = by_name.get(normalized.lower())
+    if direct is not None:
+        return direct
+    return by_last_word.get(team_last_word(normalized))
+
+
 async def build_game_features(home_team: str, away_team: str, game_date: date, nba_client: NBAStatsClient) -> GameFeatures:
     season = game_date.year
     season_stats = await nba_client.get_team_stats(season)
     if not season_stats:
         raise ValueError("No team stats available")
 
-    by_name = {team["team_name"].lower(): team for team in season_stats}
-    home = by_name.get(home_team.lower())
-    away = by_name.get(away_team.lower())
+    by_name = {normalize_team_name(team["team_name"]).lower(): team for team in season_stats}
+    by_last_word = {team_last_word(team["team_name"]): team for team in season_stats}
+    logger.info(
+        "Matching teams for features home='%s' away='%s'; available_stats_teams=%s",
+        home_team,
+        away_team,
+        sorted(by_name.keys()),
+    )
+
+    home = _resolve_team_stats(home_team, by_name, by_last_word)
+    away = _resolve_team_stats(away_team, by_name, by_last_word)
     if home is None or away is None:
         raise ValueError(f"Missing team stats for {home_team} vs {away_team}")
 

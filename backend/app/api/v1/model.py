@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -16,6 +17,8 @@ from app.models.game import Game
 from app.models.odds_snapshot import OddsSnapshot
 from app.models.sport import Sport
 from app.tasks.train_model import run_model_training_background
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/model", tags=["model"])
 
@@ -57,6 +60,12 @@ async def today_predictions(session: AsyncSession = Depends(get_session)) -> lis
     ).all()
 
     client = NBAStatsClient()
+    seasons = {g.commence_time.date().year for g in games}
+    for season in seasons:
+        if not await client.get_team_stats(season, use_cache=True):
+            logger.info("Skipping /model/predictions/today: missing cached team stats for season %s", season)
+            return []
+
     predictions: list[dict] = []
 
     for game in games:
