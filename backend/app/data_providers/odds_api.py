@@ -55,7 +55,7 @@ class OddsAPIClient:
         markets: str = "h2h,spreads,totals",
         bookmakers: str | None = None,
     ) -> OddsAPIResult:
-        params: dict[str, Any] = {"regions": regions, "markets": markets}
+        params: dict[str, Any] = {"regions": regions, "markets": markets, "oddsFormat": "american"}
         if bookmakers:
             params["bookmakers"] = bookmakers
         result = await self._get(f"sports/{sport}/odds", params=params)
@@ -83,4 +83,4 @@ class OddsAPIClient:
         )
 
     async def get_scores(self, sport: str) -> OddsAPIResult:
-        return await self._get(f"sports/{sport}/scores")
+        return await self._get(f"sports/{sport}/scores", params={"oddsFormat": "american"})
