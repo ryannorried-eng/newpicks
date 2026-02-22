@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends
@@ -14,7 +15,7 @@ from app.ml.model import predictor
 from app.models.game import Game
 from app.models.odds_snapshot import OddsSnapshot
 from app.models.sport import Sport
-from app.tasks.train_model import run_model_training
+from app.tasks.train_model import run_model_training_background
 
 router = APIRouter(prefix="/model", tags=["model"])
 
@@ -34,7 +35,8 @@ async def model_status() -> dict:
 @router.post("/train")
 async def train_model() -> dict:
     client = NBAStatsClient()
-    return await run_model_training(client)
+    asyncio.create_task(run_model_training_background(client))
+    return {"status": "training_started"}
 
 
 @router.get("/predictions/today")

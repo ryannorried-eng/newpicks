@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -16,9 +17,12 @@ class NBAStatsClient:
     REQUEST_DELAY_S = 0.6
 
     def __init__(self) -> None:
+        self._logger = logging.getLogger(__name__)
         self._team_cache: dict[int, dict[str, Any]] = {}
         self._team_name_cache: dict[str, dict[str, Any]] = {}
         self._season_stats_cache: dict[int, list[dict[str, Any]]] = {}
+        self._season_games_cache: dict[int, pd.DataFrame] = {}
+        self._current_metrics_cache: dict[int, dict[str, Any]] = {}
 
     async def _pace(self) -> None:
         await asyncio.sleep(self.REQUEST_DELAY_S)
@@ -52,23 +56,43 @@ class NBAStatsClient:
         return f"{season}-{str(season + 1)[-2:]}"
 
     async def _get_team_games_df(self, team_id: int, season: int | None = None) -> pd.DataFrame:
-        params: dict[str, Any] = {
-            "team_id_nullable": team_id,
-            "season_type_nullable": SeasonTypeAllStar.regular,
-        }
-        if season is not None:
-            params["season_nullable"] = await self._season_str(season)
+        use_season = season if season is not None else datetime.now(UTC).year
+        season_games = await self.get_season_games_df(use_season)
+        if season_games.empty:
+            return pd.DataFrame()
+        return season_games[season_games["TEAM_ID"] == team_id].copy()
 
-        endpoint = await asyncio.to_thread(leaguegamefinder.LeagueGameFinder, **params)
+    async def get_season_games_df(self, season: int) -> pd.DataFrame:
+        if season in self._season_games_cache:
+            return self._season_games_cache[season]
+
+        season_str = await self._season_str(season)
+        self._logger.info("Fetching season %s games from LeagueGameFinder...", season_str)
+        endpoint = await asyncio.to_thread(
+            leaguegamefinder.LeagueGameFinder,
+            league_id_nullable="00",
+            season_nullable=season_str,
+            season_type_nullable=SeasonTypeAllStar.regular,
+        )
         await self._pace()
         frames = endpoint.get_data_frames()
         if not frames:
-            return pd.DataFrame()
+            self._season_games_cache[season] = pd.DataFrame()
+            return self._season_games_cache[season]
 
         df = frames[0].copy()
         if "GAME_DATE" in df.columns:
             df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], utc=True, errors="coerce")
+
+        self._logger.info("Got %s game rows for season %s", len(df.index), season_str)
+        self._season_games_cache[season] = df
         return df
+
+    async def get_season_games(self, season: int) -> list[dict[str, Any]]:
+        df = await self.get_season_games_df(season)
+        if df.empty:
+            return []
+        return df.to_dict(orient="records")
 
     async def get_team_stats(self, season: int) -> list[dict]:
         if season in self._season_stats_cache:
@@ -85,19 +109,21 @@ class NBAStatsClient:
         await self._pace()
         standings_df = standings_ep.get_data_frames()[0]
 
-        metrics_ep = await asyncio.to_thread(
-            teamestimatedmetrics.TeamEstimatedMetrics,
-            season=season_str,
-            season_type=SeasonTypeAllStar.regular,
-        )
-        await self._pace()
-        metrics_df = metrics_ep.get_data_frames()[0]
-
-        metrics_by_team = {
-            int(row["TEAM_ID"]): row
-            for _, row in metrics_df.iterrows()
-            if pd.notna(row.get("TEAM_ID"))
-        }
+        if season not in self._current_metrics_cache:
+            self._logger.info("Fetching TeamEstimatedMetrics for season %s...", season_str)
+            metrics_ep = await asyncio.to_thread(
+                teamestimatedmetrics.TeamEstimatedMetrics,
+                season=season_str,
+                season_type=SeasonTypeAllStar.regular,
+            )
+            await self._pace()
+            metrics_df = metrics_ep.get_data_frames()[0]
+            self._current_metrics_cache[season] = {
+                int(row["TEAM_ID"]): row
+                for _, row in metrics_df.iterrows()
+                if pd.notna(row.get("TEAM_ID"))
+            }
+        metrics_by_team = self._current_metrics_cache[season]
 
         stats: list[dict[str, Any]] = []
         for _, row in standings_df.iterrows():
@@ -134,7 +160,8 @@ class NBAStatsClient:
 
     async def get_recent_games(self, team_id: int, n_games: int = 10) -> list[dict]:
         await self._load_teams()
-        df = await self._get_team_games_df(team_id)
+        season = max(self._season_stats_cache.keys(), default=datetime.now(UTC).year)
+        df = await self._get_team_games_df(team_id, season=season)
         if df.empty:
             return []
 
@@ -165,7 +192,8 @@ class NBAStatsClient:
         return recent
 
     async def get_schedule_context(self, team_id: int, game_date: date) -> dict:
-        df = await self._get_team_games_df(team_id)
+        season = game_date.year if game_date.month >= 7 else game_date.year - 1
+        df = await self._get_team_games_df(team_id, season=season)
         if df.empty:
             return {
                 "rest_days": 3,
