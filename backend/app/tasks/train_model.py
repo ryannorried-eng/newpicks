@@ -52,9 +52,8 @@ async def collect_training_data(
     if not X:
         for season in seasons:
             team_stats = await nba_client.get_team_stats(season)
-            by_id = {t["team_id"]: t for t in team_stats}
             for team in team_stats:
-                await asyncio.sleep(2.1)
+                await asyncio.sleep(0.6)
                 recent = await nba_client.get_recent_games(team["team_id"], n_games=10)
                 for game in recent:
                     opp = next((t for t in team_stats if t["team_name"] == game["opponent"]), None)

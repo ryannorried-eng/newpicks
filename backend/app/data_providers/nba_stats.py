@@ -1,96 +1,125 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import UTC, date, datetime
 from typing import Any
 
-import httpx
+import pandas as pd
+from nba_api.stats.endpoints import leaguegamefinder, leaguestandings, teamestimatedmetrics
+from nba_api.stats.library.parameters import SeasonTypeAllStar
+from nba_api.stats.static import teams
 
 
 class NBAStatsClient:
-    """Fetch team-level NBA stats for model features."""
+    """Fetch team-level NBA stats for model features via nba_api."""
+
+    REQUEST_DELAY_S = 0.6
 
     def __init__(self) -> None:
-        self.base_url = "https://api.balldontlie.io/v1"
-        self.api_key = os.environ.get("BALLDONTLIE_API_KEY")
-        self._team_cache: dict[str, dict[str, Any]] = {}
+        self._team_cache: dict[int, dict[str, Any]] = {}
+        self._team_name_cache: dict[str, dict[str, Any]] = {}
         self._season_stats_cache: dict[int, list[dict[str, Any]]] = {}
 
-    async def _request(self, endpoint: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        headers: dict[str, str] = {}
-        if self.api_key:
-            headers["Authorization"] = self.api_key
+    async def _pace(self) -> None:
+        await asyncio.sleep(self.REQUEST_DELAY_S)
 
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get(f"{self.base_url}{endpoint}", params=params or {}, headers=headers)
-            response.raise_for_status()
-            return response.json()
-
-    async def _get_teams(self) -> dict[str, dict[str, Any]]:
+    async def _load_teams(self) -> dict[int, dict[str, Any]]:
         if self._team_cache:
             return self._team_cache
 
-        payload = await self._request("/teams")
-        teams = payload.get("data", [])
-        self._team_cache = {
-            team["full_name"].lower(): team
-            for team in teams
-            if team.get("full_name")
-        }
+        static_teams = await asyncio.to_thread(teams.get_teams)
+        cache: dict[int, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+        for team in static_teams:
+            tid = int(team["id"])
+            full_name = str(team["full_name"])
+            info = {
+                "team_id": tid,
+                "team_name": full_name,
+                "abbreviation": str(team["abbreviation"]),
+                "city": str(team["city"]),
+                "nickname": str(team["nickname"]),
+            }
+            cache[tid] = info
+            by_name[full_name.lower()] = info
+
+        self._team_cache = cache
+        self._team_name_cache = by_name
         return self._team_cache
+
+    async def _season_str(self, season: int) -> str:
+        # nba_api expects season like "2024-25"
+        return f"{season}-{str(season + 1)[-2:]}"
+
+    async def _get_team_games_df(self, team_id: int, season: int | None = None) -> pd.DataFrame:
+        params: dict[str, Any] = {
+            "team_id_nullable": team_id,
+            "season_type_nullable": SeasonTypeAllStar.regular,
+        }
+        if season is not None:
+            params["season_nullable"] = await self._season_str(season)
+
+        endpoint = await asyncio.to_thread(leaguegamefinder.LeagueGameFinder, **params)
+        await self._pace()
+        frames = endpoint.get_data_frames()
+        if not frames:
+            return pd.DataFrame()
+
+        df = frames[0].copy()
+        if "GAME_DATE" in df.columns:
+            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], utc=True, errors="coerce")
+        return df
 
     async def get_team_stats(self, season: int) -> list[dict]:
         if season in self._season_stats_cache:
             return self._season_stats_cache[season]
 
-        teams = await self._get_teams()
+        await self._load_teams()
+        season_str = await self._season_str(season)
+
+        standings_ep = await asyncio.to_thread(
+            leaguestandings.LeagueStandings,
+            season=season_str,
+            season_type=SeasonTypeAllStar.regular,
+        )
+        await self._pace()
+        standings_df = standings_ep.get_data_frames()[0]
+
+        metrics_ep = await asyncio.to_thread(
+            teamestimatedmetrics.TeamEstimatedMetrics,
+            season=season_str,
+            season_type=SeasonTypeAllStar.regular,
+        )
+        await self._pace()
+        metrics_df = metrics_ep.get_data_frames()[0]
+
+        metrics_by_team = {
+            int(row["TEAM_ID"]): row
+            for _, row in metrics_df.iterrows()
+            if pd.notna(row.get("TEAM_ID"))
+        }
+
         stats: list[dict[str, Any]] = []
-
-        for team_name, team in teams.items():
-            await asyncio.sleep(2.1)  # <= 30 req/min
-            games_payload = await self._request(
-                "/games",
-                {
-                    "seasons[]": season,
-                    "team_ids[]": team["id"],
-                    "per_page": 100,
-                },
-            )
-            games = games_payload.get("data", [])
-            if not games:
+        for _, row in standings_df.iterrows():
+            team_id = int(row["TeamID"])
+            team_info = self._team_cache.get(team_id)
+            if not team_info:
                 continue
-
-            wins = 0
-            losses = 0
-            points_for = 0
-            points_against = 0
-            for game in games:
-                is_home = game.get("home_team", {}).get("id") == team["id"]
-                team_score = game.get("home_team_score", 0) if is_home else game.get("visitor_team_score", 0)
-                opp_score = game.get("visitor_team_score", 0) if is_home else game.get("home_team_score", 0)
-                points_for += team_score
-                points_against += opp_score
-                if team_score > opp_score:
-                    wins += 1
-                else:
-                    losses += 1
-
-            played = max(wins + losses, 1)
-            off_rating = (points_for / played) * 1.02
-            def_rating = (points_against / played) * 1.02
-            net = off_rating - def_rating
-            pace = 98.0 + (net * 0.2)
+            m = metrics_by_team.get(team_id)
+            off = float(m["E_OFF_RATING"]) if m is not None and pd.notna(m.get("E_OFF_RATING")) else 110.0
+            deff = float(m["E_DEF_RATING"]) if m is not None and pd.notna(m.get("E_DEF_RATING")) else 110.0
+            net = float(m["E_NET_RATING"]) if m is not None and pd.notna(m.get("E_NET_RATING")) else off - deff
+            pace = float(m["E_PACE"]) if m is not None and pd.notna(m.get("E_PACE")) else 99.0
 
             stats.append(
                 {
-                    "team_id": team["id"],
-                    "team_name": team["full_name"],
-                    "abbreviation": team["abbreviation"],
-                    "wins": wins,
-                    "losses": losses,
-                    "offensive_rating": round(off_rating, 3),
-                    "defensive_rating": round(def_rating, 3),
+                    "team_id": team_id,
+                    "team_name": team_info["team_name"],
+                    "abbreviation": team_info["abbreviation"],
+                    "wins": int(row.get("WINS", 0)),
+                    "losses": int(row.get("LOSSES", 0)),
+                    "offensive_rating": round(off, 3),
+                    "defensive_rating": round(deff, 3),
                     "net_rating": round(net, 3),
                     "pace": round(pace, 3),
                     "true_shooting_pct": 0.56,
@@ -104,65 +133,66 @@ class NBAStatsClient:
         return stats
 
     async def get_recent_games(self, team_id: int, n_games: int = 10) -> list[dict]:
-        payload = await self._request(
-            "/games",
-            {
-                "team_ids[]": team_id,
-                "per_page": n_games,
-            },
-        )
-        games = payload.get("data", [])
-        recent: list[dict[str, Any]] = []
+        await self._load_teams()
+        df = await self._get_team_games_df(team_id)
+        if df.empty:
+            return []
 
-        for game in games[:n_games]:
-            is_home = game.get("home_team", {}).get("id") == team_id
-            opp_name = game.get("visitor_team", {}).get("full_name") if is_home else game.get("home_team", {}).get("full_name")
-            team_score = game.get("home_team_score", 0) if is_home else game.get("visitor_team_score", 0)
-            opp_score = game.get("visitor_team_score", 0) if is_home else game.get("home_team_score", 0)
+        df = df.sort_values("GAME_DATE", ascending=False).head(n_games)
+        recent: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            matchup = str(row.get("MATCHUP", ""))
+            is_home = " vs. " in matchup
+            opp_abbr = matchup.split()[-1] if matchup else ""
+            opp_team = next((t["team_name"] for t in self._team_cache.values() if t["abbreviation"] == opp_abbr), opp_abbr or "Unknown")
+            pts = int(row.get("PTS", 0) or 0)
+            plus_minus = float(row.get("PLUS_MINUS", 0.0) or 0.0)
+            opp_pts = int(round(pts - plus_minus))
+            game_date = row.get("GAME_DATE")
+            date_str = game_date.date().isoformat() if pd.notna(game_date) else ""
+
             recent.append(
                 {
-                    "date": game.get("date", "")[:10],
-                    "opponent": opp_name or "Unknown",
+                    "date": date_str,
+                    "opponent": opp_team,
                     "home": is_home,
-                    "score": team_score,
-                    "opponent_score": opp_score,
-                    "win": team_score > opp_score,
+                    "score": pts,
+                    "opponent_score": opp_pts,
+                    "win": str(row.get("WL", "")).upper() == "W",
                 }
             )
 
         return recent
 
     async def get_schedule_context(self, team_id: int, game_date: date) -> dict:
-        payload = await self._request(
-            "/games",
-            {
-                "team_ids[]": team_id,
-                "dates[]": game_date.isoformat(),
-                "per_page": 1,
-            },
-        )
-        is_home = False
-        game_day = payload.get("data", [])
-        if game_day:
-            game = game_day[0]
-            is_home = game.get("home_team", {}).get("id") == team_id
+        df = await self._get_team_games_df(team_id)
+        if df.empty:
+            return {
+                "rest_days": 3,
+                "is_back_to_back": False,
+                "games_in_last_7": 0,
+                "is_home": True,
+                "travel_distance_est": 0,
+            }
 
-        recent_payload = await self._request("/games", {"team_ids[]": team_id, "per_page": 20})
-        games = recent_payload.get("data", [])
-        parsed_dates: list[datetime] = []
-        for game in games:
-            d = game.get("date")
-            if not d:
-                continue
-            parsed_dates.append(datetime.fromisoformat(d.replace("Z", "+00:00")).astimezone(UTC))
+        target_dt = datetime.combine(game_date, datetime.min.time(), tzinfo=UTC)
+        prior = df[df["GAME_DATE"] < target_dt].sort_values("GAME_DATE", ascending=False)
 
-        parsed_dates.sort(reverse=True)
-        prior_games = [d for d in parsed_dates if d.date() < game_date]
-        rest_days = (game_date - prior_games[0].date()).days if prior_games else 3
-        games_in_last_7 = sum(1 for d in prior_games if (game_date - d.date()).days <= 7)
+        rest_days = 3
+        games_in_last_7 = 0
+        if not prior.empty:
+            last_dt = prior.iloc[0]["GAME_DATE"]
+            rest_days = max((target_dt.date() - last_dt.date()).days, 0)
+            games_in_last_7 = int((prior["GAME_DATE"] >= (target_dt - pd.Timedelta(days=7))).sum())
+
+        same_day = df[df["GAME_DATE"].dt.date == game_date]
+        is_home = True
+        if not same_day.empty:
+            matchup = str(same_day.iloc[0].get("MATCHUP", ""))
+            is_home = " vs. " in matchup
 
         return {
-            "rest_days": max(rest_days, 0),
+            "rest_days": rest_days,
             "is_back_to_back": rest_days <= 1,
             "games_in_last_7": games_in_last_7,
             "is_home": is_home,
