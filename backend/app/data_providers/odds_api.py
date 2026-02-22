@@ -83,4 +83,4 @@ class OddsAPIClient:
         )
 
     async def get_scores(self, sport: str) -> OddsAPIResult:
-        return await self._get(f"sports/{sport}/scores", params={"oddsFormat": "american"})
+        return await self._get(f"sports/{sport}/scores", params={"daysFrom": 2, "oddsFormat": "american"})
