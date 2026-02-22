@@ -10,6 +10,7 @@ from app.models.game import Game
 from app.models.sport import Sport
 from app.services.polling_scheduler import scheduler
 from app.tasks.fetch_odds import fetch_odds_adaptive, sync_sports
+from app.tasks.generate_picks import run_generate_picks
 
 client = OddsAPIClient()
 
@@ -38,6 +39,11 @@ async def run_fetch_odds() -> None:
         await fetch_odds_adaptive(client, session)
 
 
+
+
+async def run_generate_picks_task() -> None:
+    await run_generate_picks()
+
 async def main() -> None:
     await startup_sync()
     await check_daily_schedule()
@@ -46,6 +52,7 @@ async def main() -> None:
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(check_daily_schedule, "interval", hours=1)
     sched.add_job(run_fetch_odds, "interval", minutes=10)
+    sched.add_job(run_generate_picks_task, "cron", hour=13, minute=0)
     sched.start()
 
     while True:
