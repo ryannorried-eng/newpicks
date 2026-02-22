@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -15,3 +15,7 @@ class Game(Base):
     home_team: Mapped[str] = mapped_column(String(128))
     away_team: Mapped[str] = mapped_column(String(128))
     commence_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    home_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    away_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    result_fetched: Mapped[bool] = mapped_column(Boolean, default=False)

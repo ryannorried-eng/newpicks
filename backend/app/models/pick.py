@@ -31,6 +31,7 @@ class Pick(Base):
     data_quality: Mapped[dict] = mapped_column(JSON)
     suggested_kelly_fraction: Mapped[float] = mapped_column(Float)
     outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    profit_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
     market_clv: Mapped[float | None] = mapped_column(Float, nullable=True)
     book_clv: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

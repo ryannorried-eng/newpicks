@@ -12,6 +12,9 @@ from app.services.polling_scheduler import scheduler
 from app.tasks.fetch_odds import fetch_odds_adaptive, sync_sports
 from app.tasks.generate_picks import run_generate_picks
 from app.tasks.generate_parlays import run_generate_parlays
+from app.tasks.settle import run_settlement_pipeline
+from app.tasks.capture_closing_lines import capture_closing_lines
+from sqlalchemy import text
 
 client = OddsAPIClient()
 
@@ -49,6 +52,22 @@ async def run_generate_picks_task() -> None:
 async def run_generate_parlays_task() -> None:
     await run_generate_parlays()
 
+
+async def run_capture_closing_lines_task() -> None:
+    async with AsyncSessionLocal() as session:
+        lock = await session.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": 927413})
+        if not lock:
+            return
+        try:
+            await capture_closing_lines(session)
+        finally:
+            await session.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": 927413})
+            await session.commit()
+
+
+async def run_settlement_pipeline_task() -> None:
+    await run_settlement_pipeline()
+
 async def main() -> None:
     await startup_sync()
     await check_daily_schedule()
@@ -57,6 +76,8 @@ async def main() -> None:
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(check_daily_schedule, "interval", hours=1)
     sched.add_job(run_fetch_odds, "interval", minutes=10)
+    sched.add_job(run_capture_closing_lines_task, "interval", minutes=10)
+    sched.add_job(run_settlement_pipeline_task, "interval", minutes=30)
     sched.add_job(run_generate_picks_task, "cron", hour=13, minute=0)
     sched.add_job(run_generate_parlays_task, "cron", hour=13, minute=15)
     sched.start()
