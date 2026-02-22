@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import Select, select
@@ -13,6 +14,19 @@ from app.services.polling_scheduler import scheduler
 from app.utils.odds_math import american_to_implied_prob, remove_vig
 
 
+logger = logging.getLogger(__name__)
+
+SUPPORTED_GAME_SPORTS = {
+    "basketball_nba",
+    "americanfootball_nfl",
+    "baseball_mlb",
+    "icehockey_nhl",
+    "basketball_wnba",
+    "americanfootball_ncaaf",
+    "basketball_ncaab",
+}
+
+
 async def sync_sports(client: OddsAPIClient, session: AsyncSession) -> None:
     sports = await client.get_sports()
     scheduler.update_quota(sports.requests_remaining)
@@ -20,16 +34,31 @@ async def sync_sports(client: OddsAPIClient, session: AsyncSession) -> None:
         key = item.get("key")
         if not key:
             continue
+        is_active = key in SUPPORTED_GAME_SPORTS and item.get("active", True)
         existing = await session.scalar(select(Sport).where(Sport.key == key))
         if existing is None:
-            session.add(Sport(key=key, name=item.get("title", key), active=item.get("active", True)))
+            session.add(Sport(key=key, name=item.get("title", key), active=is_active))
+            continue
+        existing.name = item.get("title", key)
+        existing.active = is_active
+
+    unsupported_stmt = select(Sport).where(Sport.key.not_in(SUPPORTED_GAME_SPORTS), Sport.active.is_(True))
+    unsupported_sports = await session.scalars(unsupported_stmt)
+    for sport in unsupported_sports:
+        sport.active = False
     await session.commit()
 
 
 async def fetch_odds_adaptive(client: OddsAPIClient, session: AsyncSession) -> None:
     sports: list[Sport] = list((await session.scalars(select(Sport).where(Sport.active.is_(True)))).all())
     for sport in sports:
-        result = await client.get_odds(sport=sport.key, bookmakers=scheduler.poll_bookmakers())
+        if sport.key not in SUPPORTED_GAME_SPORTS:
+            continue
+        try:
+            result = await client.get_odds(sport=sport.key, bookmakers=scheduler.poll_bookmakers())
+        except Exception:
+            logger.exception("Failed to fetch odds for sport %s", sport.key)
+            continue
         scheduler.update_quota(result.requests_remaining)
         await _store_odds_payload(session, sport.id, sport.key, result.data)
 
