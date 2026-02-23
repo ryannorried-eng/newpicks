@@ -60,7 +60,10 @@ async def today_predictions(session: AsyncSession = Depends(get_session)) -> lis
     ).all()
 
     client = NBAStatsClient()
-    seasons = {g.commence_time.date().year for g in games}
+    seasons = {
+        g.commence_time.year - 1 if g.commence_time.month < 10 else g.commence_time.year
+        for g in games
+    }
     for season in seasons:
         if not await client.get_team_stats(season, use_cache=True):
             logger.info("Skipping /model/predictions/today: missing cached team stats for season %s", season)
@@ -77,14 +80,15 @@ async def today_predictions(session: AsyncSession = Depends(get_session)) -> lis
         if not snapshots:
             continue
         market = calculate_consensus(snapshots, "h2h")
-        home_market = market.get(game.home_team, {}).get("fair_prob")
+        home_market = market.get(game.home_team.lower(), {}).get("fair_prob")
         if home_market is None:
             continue
 
         try:
             features = await build_game_features(game.home_team, game.away_team, game.commence_time.date(), client)
             model_prob = predictor.predict_home_win_prob(features_to_array(features))
-        except Exception:
+        except Exception as exc:
+            logger.warning("Skipping prediction for %s vs %s: %s", game.home_team, game.away_team, exc)
             continue
 
         predictions.append(
