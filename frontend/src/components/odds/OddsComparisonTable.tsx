@@ -30,6 +30,21 @@ function isLaterSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnaps
   return new Date(candidate.snapshot_time).getTime() > new Date(current.snapshot_time).getTime();
 }
 
+function resolveHomeAwaySide(snapshot: OddsSnapshot): "home" | "away" | null {
+  const side = snapshot.side.toLowerCase();
+  const homeTeam = snapshot.home_team.toLowerCase();
+  const awayTeam = snapshot.away_team.toLowerCase();
+
+  if (side === "home" || side === homeTeam) {
+    return "home";
+  }
+  if (side === "away" || side === awayTeam) {
+    return "away";
+  }
+
+  return null;
+}
+
 export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; gameId: number | null }) {
   const marketGroups = useMemo(() => {
     const gameOdds = gameId ? odds.filter((snapshot) => snapshot.game_id === gameId) : [];
@@ -64,10 +79,12 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         line: null,
       };
 
-      if (snapshot.side === "home" || snapshot.side === "over") {
+      const mappedSide = resolveHomeAwaySide(snapshot);
+
+      if (mappedSide === "home" || snapshot.side === "over") {
         row.homeOdds = snapshot.odds;
       }
-      if (snapshot.side === "away" || snapshot.side === "under") {
+      if (mappedSide === "away" || snapshot.side === "under") {
         row.awayOdds = snapshot.odds;
       }
       if (snapshot.line !== null) {
