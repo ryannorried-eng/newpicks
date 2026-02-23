@@ -1,20 +1,31 @@
 import logging
+import re
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-def _normalize(value: str | None) -> str:
-    return (value or "").strip().lower()
+def normalize_str(s: str | None) -> str:
+    """Normalize strings for robust comparisons."""
+    if s is None:
+        return ""
+    return re.sub(r"\s+", " ", s.strip().lower())
 
 
 def resolve_side(side: str | None, home_team: str | None, away_team: str | None) -> str | None:
-    normalized_side = _normalize(side)
-    normalized_home = _normalize(home_team)
-    normalized_away = _normalize(away_team)
+    """Map side to canonical home/away when possible."""
+    normalized_side = normalize_str(side)
+    normalized_home = normalize_str(home_team)
+    normalized_away = normalize_str(away_team)
 
-    if normalized_side == "home" or (normalized_home and normalized_side == normalized_home):
+    if normalized_side == "home":
         return "home"
-    if normalized_side == "away" or (normalized_away and normalized_side == normalized_away):
+    if normalized_side == "away":
+        return "away"
+
+    if normalized_side and normalized_home and normalized_side == normalized_home:
+        return "home"
+    if normalized_side and normalized_away and normalized_side == normalized_away:
         return "away"
 
     if normalized_side:
@@ -24,25 +35,23 @@ def resolve_side(side: str | None, home_team: str | None, away_team: str | None)
             home_team,
             away_team,
         )
-
     return None
 
 
-def normalize_team(side: str | None, home_team: str | None, away_team: str | None) -> str | None:
-    canonical_side = resolve_side(side, home_team, away_team)
-    if canonical_side == "home":
-        return home_team
-    if canonical_side == "away":
-        return away_team
-    return None
+def normalize_team_name(team: str | None) -> str | None:
+    """Normalized team-side text for matching/debugging (not display)."""
+    normalized = normalize_str(team)
+    return normalized or None
 
 
-def format_live_odds_rows(rows: list[tuple[object, str | None, str | None]]) -> list[dict]:
+def format_live_odds_rows(rows: list[tuple[Any, str | None, str | None]]) -> list[dict]:
+    """Backwards-compatible row formatter used by tests and API composition."""
     payload: list[dict] = []
+
     for snapshot, home_team, away_team in rows:
         if snapshot.market in {"h2h", "spreads"}:
             canonical_side = resolve_side(snapshot.side, home_team, away_team)
-            normalized_team = normalize_team(snapshot.side, home_team, away_team)
+            normalized_team = normalize_team_name(snapshot.side)
         else:
             canonical_side = None
             normalized_team = None
