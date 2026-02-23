@@ -3,80 +3,113 @@ import { LineMovementChart } from "../components/odds/LineMovementChart";
 import { OddsComparisonTable } from "../components/odds/OddsComparisonTable";
 import { useLiveOdds } from "../hooks/useOdds";
 
-const SPORT_LABELS: Record<string, string> = {
-  basketball_nba: "NBA",
-  basketball_ncaab: "NCAAB",
-  icehockey_nhl: "NHL",
-  americanfootball_ncaaf: "NCAAF",
+const SPORT_TABS = ["all", "nba", "ncaab", "nhl", "ncaaf"] as const;
+type SportTab = typeof SPORT_TABS[number];
+
+const SPORT_LABELS: Record<SportTab, string> = {
+  all: "All",
+  nba: "NBA",
+  ncaab: "NCAAB",
+  nhl: "NHL",
+  ncaaf: "NCAAF",
 };
 
-const SPORT_TABS = ["basketball_nba", "basketball_ncaab", "icehockey_nhl", "americanfootball_ncaaf"];
+function normalizeSportKey(sportKey: string | null | undefined): SportTab | null {
+  const value = (sportKey ?? "").toLowerCase();
+  if (!value) {
+    return null;
+  }
+  if (value.includes("ncaab")) {
+    return "ncaab";
+  }
+  if (value.includes("nba")) {
+    return "nba";
+  }
+  if (value.includes("ncaaf")) {
+    return "ncaaf";
+  }
+  if (value.includes("nhl")) {
+    return "nhl";
+  }
+  return null;
+}
+
+type GameOption = {
+  game_id: number;
+  home_team: string;
+  away_team: string;
+  sport: SportTab | null;
+};
 
 export default function OddsPage() {
-  const { data = [] } = useLiveOdds();
-  const [sport, setSport] = useState<string>("all");
+  const { data: rawRows = [] } = useLiveOdds();
+  const [sport, setSport] = useState<SportTab>("all");
   const [gameId, setGameId] = useState<number | null>(null);
 
+  const filteredRows = useMemo(() => {
+    if (sport === "all") {
+      return rawRows;
+    }
+
+    return rawRows.filter((snapshot) => normalizeSportKey(snapshot.sport_key) === sport);
+  }, [rawRows, sport]);
+
   const sportSnapshotCounts = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const snapshot of data) {
-      counts.set(snapshot.sport_key, (counts.get(snapshot.sport_key) ?? 0) + 1);
+    const counts = new Map<SportTab, number>();
+    for (const snapshot of rawRows) {
+      const normalizedSport = normalizeSportKey(snapshot.sport_key);
+      if (!normalizedSport) {
+        continue;
+      }
+      counts.set(normalizedSport, (counts.get(normalizedSport) ?? 0) + 1);
     }
     return counts;
-  }, [data]);
+  }, [rawRows]);
 
   const games = useMemo(() => {
-    const byGameId = new Map<number, { game_id: number; home_team: string; away_team: string; sport_key: string }>();
-    for (const snapshot of data) {
-      if (!byGameId.has(snapshot.game_id)) {
-        byGameId.set(snapshot.game_id, {
+    const byGameKey = new Map<string, GameOption>();
+    for (const snapshot of filteredRows) {
+      const key = `${snapshot.game_id}|${snapshot.home_team}|${snapshot.away_team}`;
+      if (!byGameKey.has(key)) {
+        byGameKey.set(key, {
           game_id: snapshot.game_id,
           home_team: snapshot.home_team,
           away_team: snapshot.away_team,
-          sport_key: snapshot.sport_key,
+          sport: normalizeSportKey(snapshot.sport_key),
         });
       }
     }
+    return Array.from(byGameKey.values());
+  }, [filteredRows]);
 
-    const uniqueGames = Array.from(byGameId.values());
-    if (sport === "all") {
-      return uniqueGames;
-    }
-
-    return uniqueGames.filter((game) => game.sport_key === sport);
-  }, [data, sport]);
+  console.debug("[OddsPage] rows debug", {
+    rawRows: rawRows.length,
+    filteredRows: filteredRows.length,
+    games: games.length,
+    selectedSport: sport,
+  });
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            setSport("all");
-            setGameId(null);
-          }}
-          className={`rounded-lg px-3 py-2 text-sm ${sport === "all" ? "bg-amber-500/20 text-amber-300" : "bg-gray-900 text-gray-400"}`}
-        >
-          All
-        </button>
         {SPORT_TABS.map((sportKey) => (
           <button
             key={sportKey}
             type="button"
-            disabled={!sportSnapshotCounts.get(sportKey)}
+            disabled={sportKey !== "all" && !sportSnapshotCounts.get(sportKey)}
             onClick={() => {
               setSport(sportKey);
               setGameId(null);
             }}
             className={`rounded-lg px-3 py-2 text-sm transition-colors ${
-              !sportSnapshotCounts.get(sportKey)
+              sportKey !== "all" && !sportSnapshotCounts.get(sportKey)
                 ? "cursor-not-allowed bg-gray-900/60 text-gray-600"
                 : sport === sportKey
                   ? "bg-amber-500/20 text-amber-300"
                   : "bg-gray-900 text-gray-400 hover:text-gray-200"
             }`}
           >
-            {SPORT_LABELS[sportKey] ?? sportKey}
+            {SPORT_LABELS[sportKey]}
           </button>
         ))}
       </div>
@@ -89,8 +122,8 @@ export default function OddsPage() {
           return <option key={game.game_id} value={game.game_id}>{label}</option>;
         })}
       </select>
-      <OddsComparisonTable odds={data} gameId={gameId} />
-      <LineMovementChart odds={data} gameId={gameId} />
+      <OddsComparisonTable odds={filteredRows} gameId={gameId} />
+      <LineMovementChart odds={filteredRows} gameId={gameId} />
     </div>
   );
 }
