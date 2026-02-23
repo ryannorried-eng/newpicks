@@ -98,7 +98,10 @@ async def generate_model_picks(session: AsyncSession, games: list[Game], today_s
 
     generated: list[Pick] = []
     nba_client = NBAStatsClient()
-    seasons = {g.commence_time.date().year for g in games}
+    seasons = {
+        g.commence_time.year - 1 if g.commence_time.month < 10 else g.commence_time.year
+        for g in games
+    }
     for season in seasons:
         if not await nba_client.get_team_stats(season, use_cache=True):
             logger.info("Skipping model picks: missing cached team stats for season %s", season)
@@ -133,7 +136,7 @@ async def generate_model_picks(session: AsyncSession, games: list[Game], today_s
         }
 
         for side, model_prob in sides.items():
-            side_data = consensus.get(side)
+            side_data = consensus.get(side.lower())
             if not side_data:
                 continue
             market_prob = side_data["fair_prob"]
