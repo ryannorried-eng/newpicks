@@ -13,30 +13,25 @@ import {
 } from "recharts";
 import type { OddsSnapshot } from "../../types";
 
+type BucketKey = "home" | "away" | "over" | "under" | "unknown";
+
+function norm(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
+function isTeamMarket(market: string): boolean {
+  return market === "h2h" || market === "spreads";
+}
+
+function isTotalsMarket(market: string): boolean {
+  return market === "totals";
+}
+
 function isLatestSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnapshot) {
   if (!current) {
     return true;
   }
   return new Date(candidate.snapshot_time).getTime() > new Date(current.snapshot_time).getTime();
-}
-
-function resolveHomeAwaySide(snapshot: OddsSnapshot): "home" | "away" | null {
-  if (snapshot.canonical_side === "home" || snapshot.canonical_side === "away") {
-    return snapshot.canonical_side;
-  }
-
-  const side = snapshot.side.toLowerCase();
-  const homeTeam = snapshot.home_team.toLowerCase();
-  const awayTeam = snapshot.away_team.toLowerCase();
-
-  if (side === "home" || side === homeTeam) {
-    return "home";
-  }
-  if (side === "away" || side === awayTeam) {
-    return "away";
-  }
-
-  return null;
 }
 
 export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; gameId: number | null }) {
@@ -55,21 +50,20 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
 
   const moneylineRows = useMemo(() => {
     const h2hOdds = gameOdds.filter((snapshot) => snapshot.market === "h2h");
-    const latestByBookAndSide = new Map<string, OddsSnapshot>();
+    const latestByBookAndBucket = new Map<string, OddsSnapshot>();
 
     for (const snapshot of h2hOdds) {
-      const mappedSide = resolveHomeAwaySide(snapshot);
-      const sideKey = mappedSide ?? snapshot.side.toLowerCase();
-      const key = `${snapshot.bookmaker}|${sideKey}`;
-      const existing = latestByBookAndSide.get(key);
+      const bucket: BucketKey = snapshot.canonical_side ?? "unknown";
+      const key = `${snapshot.bookmaker}|h2h|${bucket}`;
+      const existing = latestByBookAndBucket.get(key);
       if (isLatestSnapshot(existing, snapshot)) {
-        latestByBookAndSide.set(key, snapshot);
+        latestByBookAndBucket.set(key, snapshot);
       }
     }
 
     const byBook = new Map<string, { bookmaker: string; homeOdds: number | null; awayOdds: number | null }>();
 
-    for (const snapshot of latestByBookAndSide.values()) {
+    for (const snapshot of latestByBookAndBucket.values()) {
       const row = byBook.get(snapshot.bookmaker) ?? {
         bookmaker: snapshot.bookmaker,
         homeOdds: null,
@@ -93,19 +87,49 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
     return new Set(gameOdds.map((snapshot) => snapshot.snapshot_time)).size >= 3;
   }, [gameOdds]);
 
-  const lineChartData = useMemo(
-    () =>
-      gameOdds.map((snapshot) => ({
-        time: new Date(snapshot.snapshot_time).toLocaleTimeString(),
-        [snapshot.bookmaker]: snapshot.odds,
-      })),
-    [gameOdds],
-  );
+  const lineChartData = useMemo(() => {
+    const byTime = new Map<string, Record<string, number | string>>();
 
-  const lineChartBooks = useMemo(
-    () => [...new Set(gameOdds.map((snapshot) => snapshot.bookmaker))].slice(0, 5),
-    [gameOdds],
-  );
+    for (const snapshot of gameOdds) {
+      const market = snapshot.market;
+      const bucket: BucketKey = isTeamMarket(market)
+        ? (snapshot.canonical_side ?? "unknown")
+        : isTotalsMarket(market)
+          ? ((norm(snapshot.side) as BucketKey) || "unknown")
+          : ((norm(snapshot.side) as BucketKey) || "unknown");
+      const seriesKey = `${snapshot.bookmaker}|${market}|${bucket}`;
+      const time = snapshot.snapshot_time;
+
+      if (!byTime.has(time)) {
+        byTime.set(time, {
+          timestamp: time,
+          time: new Date(time).toLocaleTimeString(),
+        });
+      }
+
+      byTime.get(time)![seriesKey] = snapshot.odds;
+    }
+
+    return Array.from(byTime.values()).sort(
+      (a, b) => new Date(String(a.timestamp)).getTime() - new Date(String(b.timestamp)).getTime(),
+    );
+  }, [gameOdds]);
+
+  const lineChartSeries = useMemo(() => {
+    const series = new Set<string>();
+
+    for (const snapshot of gameOdds) {
+      const market = snapshot.market;
+      const bucket: BucketKey = isTeamMarket(market)
+        ? (snapshot.canonical_side ?? "unknown")
+        : isTotalsMarket(market)
+          ? ((norm(snapshot.side) as BucketKey) || "unknown")
+          : ((norm(snapshot.side) as BucketKey) || "unknown");
+      series.add(`${snapshot.bookmaker}|${market}|${bucket}`);
+    }
+
+    return Array.from(series).sort().slice(0, 8);
+  }, [gameOdds]);
 
   if (moneylineRows.length < 2) {
     return (
@@ -141,11 +165,12 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
               <XAxis dataKey="time" stroke="#9ca3af" />
               <YAxis stroke="#9ca3af" />
               <Tooltip />
-              {lineChartBooks.map((book, i) => (
+              {lineChartSeries.map((seriesKey, i) => (
                 <Line
-                  key={book}
-                  dataKey={book}
-                  stroke={["#34d399", "#60a5fa", "#f59e0b", "#f87171", "#a78bfa"][i]}
+                  key={seriesKey}
+                  dataKey={seriesKey}
+                  name={seriesKey}
+                  stroke={["#34d399", "#60a5fa", "#f59e0b", "#f87171", "#a78bfa", "#2dd4bf", "#fb7185", "#facc15"][i]}
                   dot={false}
                 />
               ))}
