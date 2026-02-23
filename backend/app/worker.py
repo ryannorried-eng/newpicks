@@ -106,13 +106,21 @@ async def run_fetch_odds() -> None:
         sleep_seconds,
     )
 
+    if snapshots_inserted > 0:
+        await run_generate_picks_task()
+
 
 async def run_model_training_task() -> None:
     await run_model_training(nba_client)
 
 
 async def run_generate_picks_task() -> None:
-    await run_generate_picks()
+    summary = await run_generate_picks()
+    logger.info(
+        "pick generation job complete: picks_created=%s picks_updated=%s",
+        summary.get("picks_created", 0),
+        summary.get("picks_updated", 0),
+    )
 
 
 async def run_generate_parlays_task() -> None:
@@ -158,7 +166,7 @@ async def main() -> None:
     sched.add_job(run_capture_closing_lines_task, "interval", minutes=10)
     sched.add_job(run_settlement_pipeline_task, "interval", minutes=30)
     sched.add_job(run_model_training_task, "cron", day_of_week="sun", hour=8, minute=0)
-    sched.add_job(run_generate_picks_task, "cron", hour=13, minute=0)
+    sched.add_job(run_generate_picks_task, "interval", minutes=5)
     sched.add_job(run_generate_parlays_task, "cron", hour=13, minute=15)
     sched.start()
 

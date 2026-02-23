@@ -47,11 +47,23 @@ async def _serialize_pick(session: AsyncSession, pick: Pick) -> PickResponse:
 
 
 @router.post("/generate")
-async def trigger_generate_picks() -> dict[str, int]:
-    created = await run_generate_picks()
-    if created > 0:
+async def trigger_generate_picks() -> dict[str, int | str]:
+    summary = await run_generate_picks()
+    if int(summary.get("picks_created", 0)) > 0:
         await run_generate_parlays()
-    return {"generated": created}
+    return summary
+
+
+@router.get("/live", response_model=list[PickResponse])
+async def get_live_picks(session: AsyncSession = Depends(get_session)) -> list[PickResponse]:
+    now = datetime.now(UTC)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    picks = (
+        await session.scalars(
+            select(Pick).where(Pick.pick_date >= start).order_by(Pick.ev_pct.desc())
+        )
+    ).all()
+    return [await _serialize_pick(session, p) for p in picks]
 
 
 @router.get("/today", response_model=list[PickResponse])
