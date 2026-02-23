@@ -18,7 +18,7 @@ const MARKET_LABELS: Record<MarketKey, string> = {
 
 function formatOdds(odds: number | null) {
   if (odds === null) {
-    return "-";
+    return "—";
   }
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
@@ -158,7 +158,7 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
                       <td className={`p-3 font-mono ${isBestAway ? "font-semibold text-emerald-300" : "text-gray-100"}`}>
                         {formatOdds(row.awayOdds)}
                       </td>
-                      <td className="p-3 text-gray-300">{row.line ?? "-"}</td>
+                      <td className="p-3 text-gray-300">{row.line ?? "—"}</td>
                     </tr>
                   );
                 })}
