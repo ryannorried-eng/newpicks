@@ -24,25 +24,23 @@ logger = logging.getLogger(__name__)
 def _write_team_stats_cache(season: int, stats: list[dict[str, Any]]) -> None:
     if not stats:
         return
-    os.makedirs(os.path.dirname(TEAM_STATS_CACHE_PATH), exist_ok=True)
-    payload: dict[str, Any] = {"seasons": {}, "cached_at": datetime.now(UTC).isoformat()}
-    if os.path.exists(TEAM_STATS_CACHE_PATH):
-        try:
-            with open(TEAM_STATS_CACHE_PATH, "r", encoding="utf-8") as file:
-                existing = json.load(file)
-            if isinstance(existing, dict):
-                payload.update(existing)
-                payload["seasons"] = existing.get("seasons", {}) if isinstance(existing.get("seasons"), dict) else {}
-        except Exception:
-            logger.exception("Failed to read existing team stats cache at %s", TEAM_STATS_CACHE_PATH)
 
-    payload["seasons"][str(season)] = stats
-    payload["team_stats"] = stats
-    payload["cached_at"] = datetime.now(UTC).isoformat()
+    team_stats_by_name: dict[str, dict[str, Any]] = {}
+    for team_stats in stats:
+        team_name = str(team_stats.get("team_name", "")).strip()
+        if not team_name:
+            continue
+        team_stats_by_name[team_name] = team_stats
+
+    if not team_stats_by_name:
+        return
+
+    os.makedirs(os.path.dirname(TEAM_STATS_CACHE_PATH), exist_ok=True)
 
     with open(TEAM_STATS_CACHE_PATH, "w", encoding="utf-8") as file:
-        json.dump(payload, file)
-    logger.info("Wrote team stats cache for season %s to %s", season, TEAM_STATS_CACHE_PATH)
+        json.dump(team_stats_by_name, file)
+
+    logger.info("Saved team stats cache with %s teams", len(team_stats_by_name))
 
 
 async def collect_training_data(
