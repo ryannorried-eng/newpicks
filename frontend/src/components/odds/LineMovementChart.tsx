@@ -13,7 +13,8 @@ import {
 } from "recharts";
 import type { OddsSnapshot } from "../../types";
 
-type BucketKey = "home" | "away" | "over" | "under" | "unknown";
+type TeamBucketKey = "home" | "away";
+type TotalsBucketKey = "over" | "under";
 
 function norm(s: string | null | undefined): string {
   return (s ?? "").trim().toLowerCase();
@@ -25,6 +26,24 @@ function isTeamMarket(market: string): boolean {
 
 function isTotalsMarket(market: string): boolean {
   return market === "totals";
+}
+
+function totalsBucket(side: string): TotalsBucketKey | null {
+  const value = norm(side);
+  if (value === "over" || value === "under") {
+    return value;
+  }
+  return null;
+}
+
+function chartBucket(snapshot: OddsSnapshot): TeamBucketKey | TotalsBucketKey | null {
+  if (isTeamMarket(snapshot.market)) {
+    return snapshot.canonical_side;
+  }
+  if (isTotalsMarket(snapshot.market)) {
+    return totalsBucket(snapshot.side);
+  }
+  return null;
 }
 
 function isLatestSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnapshot) {
@@ -53,7 +72,11 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
     const latestByBookAndBucket = new Map<string, OddsSnapshot>();
 
     for (const snapshot of h2hOdds) {
-      const bucket: BucketKey = snapshot.canonical_side ?? "unknown";
+      const bucket = snapshot.canonical_side;
+      if (!bucket) {
+        continue;
+      }
+
       const key = `${snapshot.bookmaker}|h2h|${bucket}`;
       const existing = latestByBookAndBucket.get(key);
       if (isLatestSnapshot(existing, snapshot)) {
@@ -91,13 +114,12 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
     const byTime = new Map<string, Record<string, number | string>>();
 
     for (const snapshot of gameOdds) {
-      const market = snapshot.market;
-      const bucket: BucketKey = isTeamMarket(market)
-        ? (snapshot.canonical_side ?? "unknown")
-        : isTotalsMarket(market)
-          ? ((norm(snapshot.side) as BucketKey) || "unknown")
-          : ((norm(snapshot.side) as BucketKey) || "unknown");
-      const seriesKey = `${snapshot.bookmaker}|${market}|${bucket}`;
+      const bucket = chartBucket(snapshot);
+      if (!bucket) {
+        continue;
+      }
+
+      const seriesKey = `${snapshot.bookmaker}|${snapshot.market}|${bucket}`;
       const time = snapshot.snapshot_time;
 
       if (!byTime.has(time)) {
@@ -119,13 +141,12 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
     const series = new Set<string>();
 
     for (const snapshot of gameOdds) {
-      const market = snapshot.market;
-      const bucket: BucketKey = isTeamMarket(market)
-        ? (snapshot.canonical_side ?? "unknown")
-        : isTotalsMarket(market)
-          ? ((norm(snapshot.side) as BucketKey) || "unknown")
-          : ((norm(snapshot.side) as BucketKey) || "unknown");
-      series.add(`${snapshot.bookmaker}|${market}|${bucket}`);
+      const bucket = chartBucket(snapshot);
+      if (!bucket) {
+        continue;
+      }
+
+      series.add(`${snapshot.bookmaker}|${snapshot.market}|${bucket}`);
     }
 
     return Array.from(series).sort().slice(0, 8);

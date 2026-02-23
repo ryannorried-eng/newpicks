@@ -2,7 +2,9 @@ import { Fragment, useMemo } from "react";
 import type { OddsSnapshot } from "../../types";
 
 type MarketKey = "h2h" | "spreads" | "totals";
-type BucketKey = "home" | "away" | "over" | "under" | "unknown";
+type TeamBucketKey = "home" | "away";
+type TotalsBucketKey = "over" | "under";
+type BucketKey = TeamBucketKey | TotalsBucketKey | "unknown";
 
 interface BucketValue {
   odds: number;
@@ -30,6 +32,24 @@ function isTeamMarket(market: string): boolean {
 
 function isTotalsMarket(market: string): boolean {
   return market === "totals";
+}
+
+function totalsBucket(side: string): TotalsBucketKey | "unknown" {
+  const value = norm(side);
+  if (value === "over" || value === "under") {
+    return value;
+  }
+  return "unknown";
+}
+
+function snapshotBucket(snapshot: OddsSnapshot, market: MarketKey): BucketKey {
+  if (isTeamMarket(market)) {
+    return snapshot.canonical_side ?? "unknown";
+  }
+  if (isTotalsMarket(market)) {
+    return totalsBucket(snapshot.side);
+  }
+  return "unknown";
 }
 
 function formatOdds(odds: number) {
@@ -66,11 +86,7 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         continue;
       }
 
-      const bucket: BucketKey = isTeamMarket(market)
-        ? (snapshot.canonical_side ?? "unknown")
-        : isTotalsMarket(market)
-          ? ((norm(snapshot.side) as BucketKey) || "unknown")
-          : "unknown";
+      const bucket = snapshotBucket(snapshot, market);
       const baseKey = `${snapshot.game_id}|${snapshot.bookmaker}|${market}`;
       const key = `${baseKey}|${bucket}`;
       const existing = latestByKey.get(key);
@@ -93,12 +109,7 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         buckets: {},
       };
 
-      const bucket: BucketKey = isTeamMarket(market)
-        ? (snapshot.canonical_side ?? "unknown")
-        : isTotalsMarket(market)
-          ? ((norm(snapshot.side) as BucketKey) || "unknown")
-          : "unknown";
-
+      const bucket = snapshotBucket(snapshot, market);
       row.buckets[bucket] = {
         odds: snapshot.odds,
         line: snapshot.line,
@@ -110,14 +121,10 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
     return (Object.keys(MARKET_LABELS) as MarketKey[])
       .map((market) => {
         const rows = Array.from(markets.get(market)?.values() ?? []).sort((a, b) => a.bookmaker.localeCompare(b.bookmaker));
-        const firstBucket: BucketKey = isTeamMarket(market) ? "home" : "over";
-        const secondBucket: BucketKey = isTeamMarket(market) ? "away" : "under";
-        const bestFirst = Math.max(
-          ...rows.map((row) => row.buckets[firstBucket]?.odds ?? Number.NEGATIVE_INFINITY),
-        );
-        const bestSecond = Math.max(
-          ...rows.map((row) => row.buckets[secondBucket]?.odds ?? Number.NEGATIVE_INFINITY),
-        );
+        const firstBucket: TeamBucketKey | TotalsBucketKey = isTeamMarket(market) ? "home" : "over";
+        const secondBucket: TeamBucketKey | TotalsBucketKey = isTeamMarket(market) ? "away" : "under";
+        const bestFirst = Math.max(...rows.map((row) => row.buckets[firstBucket]?.odds ?? Number.NEGATIVE_INFINITY));
+        const bestSecond = Math.max(...rows.map((row) => row.buckets[secondBucket]?.odds ?? Number.NEGATIVE_INFINITY));
 
         return {
           market,
@@ -140,8 +147,8 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         <thead className="bg-gray-950 text-gray-400">
           <tr>
             <th className="p-3 text-left">Bookmaker</th>
-            <th className="p-3 text-left">Side A</th>
-            <th className="p-3 text-left">Side B</th>
+            <th className="p-3 text-left">Side 1</th>
+            <th className="p-3 text-left">Side 2</th>
           </tr>
         </thead>
         <tbody>
