@@ -30,24 +30,14 @@ function isTeamMarket(market: string): boolean {
   return market === "h2h" || market === "spreads";
 }
 
-function isTotalsMarket(market: string): boolean {
-  return market === "totals";
-}
-
-function totalsBucket(side: string): TotalsBucketKey | "unknown" {
-  const value = norm(side);
-  if (value === "over" || value === "under") {
-    return value;
-  }
-  return "unknown";
-}
 
 function snapshotBucket(snapshot: OddsSnapshot, market: MarketKey): BucketKey {
   if (isTeamMarket(market)) {
     return snapshot.canonical_side ?? "unknown";
   }
-  if (isTotalsMarket(market)) {
-    return totalsBucket(snapshot.side);
+  const side = norm(snapshot.side);
+  if (side === "over" || side === "under") {
+    return side;
   }
   return "unknown";
 }
@@ -167,8 +157,12 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
                   <td className="p-3 font-semibold text-gray-300">{group.secondHeader}</td>
                 </tr>
                 {group.rows.map((row) => {
-                  const first = row.buckets[group.firstBucket];
-                  const second = row.buckets[group.secondBucket];
+                  const homeRow = row.buckets["home"];
+                  const awayRow = row.buckets["away"];
+                  const overRow = row.buckets["over"];
+                  const underRow = row.buckets["under"];
+                  const first = isTeamMarket(group.market) ? homeRow : overRow;
+                  const second = isTeamMarket(group.market) ? awayRow : underRow;
                   const isBestFirst = first?.odds !== undefined && first.odds === group.bestFirst;
                   const isBestSecond = second?.odds !== undefined && second.odds === group.bestSecond;
 
