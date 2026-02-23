@@ -4,12 +4,14 @@ from datetime import UTC, datetime
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, text
+from sqlalchemy.exc import ProgrammingError
 
-from app.config import settings
+from app.config import get_database_identity, settings
 from app.data_providers.nba_stats import NBAStatsClient
 from app.data_providers.odds_api import OddsAPIClient
 from app.database import AsyncSessionLocal
 from app.models.game import Game
+from app.models.odds_snapshot import OddsSnapshot
 from app.models.sport import Sport
 from app.services.polling_scheduler import scheduler
 from app.tasks.capture_closing_lines import capture_closing_lines
@@ -24,6 +26,28 @@ logger = logging.getLogger(__name__)
 client = OddsAPIClient()
 nba_client = NBAStatsClient()
 _missing_odds_key_logged = False
+
+
+async def wait_for_required_tables(max_attempts: int = 30, sleep_seconds: int = 2) -> None:
+    for attempt in range(1, max_attempts + 1):
+        try:
+            async with AsyncSessionLocal() as session:
+                await session.execute(text("SELECT 1 FROM sports LIMIT 1"))
+                await session.execute(text("SELECT 1 FROM odds_snapshots LIMIT 1"))
+            if attempt > 1:
+                logger.info("database schema ready after retry: attempts=%s", attempt)
+            return
+        except Exception:
+            if attempt == max_attempts:
+                logger.exception("database schema not ready after retries")
+                raise
+            logger.warning(
+                "database schema not ready; waiting before retry: attempt=%s/%s sleep_seconds=%s",
+                attempt,
+                max_attempts,
+                sleep_seconds,
+            )
+            await asyncio.sleep(sleep_seconds)
 
 
 async def check_daily_schedule() -> None:
@@ -41,6 +65,7 @@ async def check_daily_schedule() -> None:
 
 
 async def startup_sync() -> None:
+    await wait_for_required_tables()
     async with AsyncSessionLocal() as session:
         await sync_sports(client, session)
 
@@ -48,29 +73,36 @@ async def startup_sync() -> None:
 async def run_fetch_odds() -> None:
     global _missing_odds_key_logged
 
-    sleep_seconds = 600
+    sleep_seconds = settings.odds_poll_interval_seconds
     if not settings.odds_api_key:
         if not _missing_odds_key_logged:
             logger.error("ODDS_API_KEY is missing; skipping ingestion cycle until it is configured")
             _missing_odds_key_logged = True
-        logger.info("odds polling cycle skipped: games=0 snapshots_inserted=0 next_sleep_seconds=%s", sleep_seconds)
+        logger.info("odds polling cycle skipped: games_fetched=0 snapshots_inserted=0 sample_game_id=None next_sleep_seconds=%s", sleep_seconds)
         return
 
     _missing_odds_key_logged = False
     try:
         async with AsyncSessionLocal() as session:
             games_fetched, snapshots_inserted = await fetch_odds_adaptive(client, session)
+            sample_game_id = await session.scalar(
+                select(OddsSnapshot.game_id).order_by(OddsSnapshot.snapshot_time.desc()).limit(1)
+            )
     except Exception:
         sleep_seconds = 60
         logger.exception("odds polling cycle failed; applying backoff")
-        logger.info("odds polling cycle failed: games=0 snapshots_inserted=0 next_sleep_seconds=%s", sleep_seconds)
+        logger.info(
+            "odds polling cycle failed: games_fetched=0 snapshots_inserted=0 sample_game_id=None next_sleep_seconds=%s",
+            sleep_seconds,
+        )
         await asyncio.sleep(sleep_seconds)
         return
 
     logger.info(
-        "odds polling cycle complete: games=%s snapshots_inserted=%s next_sleep_seconds=%s",
+        "odds polling cycle complete: games_fetched=%s snapshots_inserted=%s sample_game_id=%s next_sleep_seconds=%s",
         games_fetched,
         snapshots_inserted,
+        sample_game_id,
         sleep_seconds,
     )
 
@@ -104,16 +136,25 @@ async def run_settlement_pipeline_task() -> None:
 
 
 async def main() -> None:
+    db_host, db_name = get_database_identity()
+    logger.info(
+        "worker startup: database_host=%s database_name=%s odds_api_key_set=%s poll_interval_seconds=%s",
+        db_host,
+        db_name,
+        bool(settings.odds_api_key),
+        settings.odds_poll_interval_seconds,
+    )
+
     await startup_sync()
     await check_daily_schedule()
     try:
         await run_fetch_odds()
-    except Exception:
-        pass
+    except ProgrammingError:
+        logger.exception("initial odds cycle failed due to schema readiness")
 
     sched = AsyncIOScheduler(timezone="UTC")
     sched.add_job(check_daily_schedule, "interval", hours=1)
-    sched.add_job(run_fetch_odds, "interval", minutes=10)
+    sched.add_job(run_fetch_odds, "interval", seconds=settings.odds_poll_interval_seconds)
     sched.add_job(run_capture_closing_lines_task, "interval", minutes=10)
     sched.add_job(run_settlement_pipeline_task, "interval", minutes=30)
     sched.add_job(run_model_training_task, "cron", day_of_week="sun", hour=8, minute=0)

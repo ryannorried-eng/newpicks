@@ -1,6 +1,12 @@
 volumes:
   model-data:
 
+x-backend-env: &backend-env
+  DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://postgres:postgres@db:5432/sharppicks}
+  ODDS_API_KEY: ${ODDS_API_KEY:-}
+  BALLDONTLIE_API_KEY: ${BALLDONTLIE_API_KEY:-}
+  ODDS_POLL_INTERVAL_SECONDS: ${ODDS_POLL_INTERVAL_SECONDS:-600}
+
 services:
   db:
     image: postgres:16
@@ -18,10 +24,7 @@ services:
 
   backend:
     build: ./backend
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sharppicks
-      ODDS_API_KEY: ${ODDS_API_KEY:-}
-      BALLDONTLIE_API_KEY: ${BALLDONTLIE_API_KEY:-}
+    environment: *backend-env
     depends_on:
       db:
         condition: service_healthy
@@ -33,10 +36,7 @@ services:
 
   worker:
     build: ./backend
-    environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:postgres@db:5432/sharppicks
-      ODDS_API_KEY: ${ODDS_API_KEY:-}
-      BALLDONTLIE_API_KEY: ${BALLDONTLIE_API_KEY:-}
+    environment: *backend-env
     depends_on:
       db:
         condition: service_healthy
