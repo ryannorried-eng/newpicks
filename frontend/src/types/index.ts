@@ -69,6 +69,18 @@ export interface Parlay {
   legs: ParlayLeg[];
 }
 
+export interface ParlayBuildResponse {
+  is_valid: boolean;
+  reason: string;
+  combined_odds_american: number | null;
+  combined_odds_decimal: number | null;
+  combined_ev_pct: number | null;
+  combined_fair_prob: number | null;
+  correlation_score: number | null;
+  compatibility_warnings: string[];
+  suggested_kelly_fraction: number | null;
+}
+
 export interface OddsSnapshot {
   game_id: number;
   home_team: string;
