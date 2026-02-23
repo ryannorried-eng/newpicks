@@ -89,6 +89,8 @@ export interface OddsSnapshot {
   bookmaker: string;
   market: string;
   side: string;
+  canonical_side: "home" | "away" | null;
+  normalized_team: string | null;
   odds: number;
   line: number | null;
   snapshot_time: string;

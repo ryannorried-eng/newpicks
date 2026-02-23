@@ -21,6 +21,10 @@ function isLatestSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnap
 }
 
 function resolveHomeAwaySide(snapshot: OddsSnapshot): "home" | "away" | null {
+  if (snapshot.canonical_side === "home" || snapshot.canonical_side === "away") {
+    return snapshot.canonical_side;
+  }
+
   const side = snapshot.side.toLowerCase();
   const homeTeam = snapshot.home_team.toLowerCase();
   const awayTeam = snapshot.away_team.toLowerCase();
@@ -54,7 +58,9 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
     const latestByBookAndSide = new Map<string, OddsSnapshot>();
 
     for (const snapshot of h2hOdds) {
-      const key = `${snapshot.bookmaker}|${snapshot.side}`;
+      const mappedSide = resolveHomeAwaySide(snapshot);
+      const sideKey = mappedSide ?? snapshot.side.toLowerCase();
+      const key = `${snapshot.bookmaker}|${sideKey}`;
       const existing = latestByBookAndSide.get(key);
       if (isLatestSnapshot(existing, snapshot)) {
         latestByBookAndSide.set(key, snapshot);
