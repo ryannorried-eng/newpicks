@@ -20,6 +20,7 @@ from app.tasks.generate_parlays import run_generate_parlays
 from app.tasks.generate_picks import run_generate_picks
 from app.tasks.settle import run_settlement_pipeline
 from app.tasks.train_model import run_model_training
+from app.tasks.update_pick_clv import run_update_pick_clv
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +110,9 @@ async def run_fetch_odds() -> None:
     if snapshots_inserted > 0:
         await run_generate_picks_task()
 
+    await run_capture_closing_lines_task()
+    await run_update_pick_clv_task()
+
 
 async def run_model_training_task() -> None:
     await run_model_training(nba_client)
@@ -117,10 +121,16 @@ async def run_model_training_task() -> None:
 async def run_generate_picks_task() -> None:
     summary = await run_generate_picks()
     logger.info(
-        "pick generation job complete: picks_created=%s picks_updated=%s",
+        "pick generation job complete: picks_created=%s picks_updated=%s picks_skipped_no_model=%s",
         summary.get("picks_created", 0),
         summary.get("picks_updated", 0),
+        summary.get("picks_skipped_no_model", 0),
     )
+
+
+async def run_update_pick_clv_task() -> None:
+    updated = await run_update_pick_clv()
+    logger.info("pick clv updater complete: picks_with_closing_updated=%s", updated)
 
 
 async def run_generate_parlays_task() -> None:
@@ -164,6 +174,7 @@ async def main() -> None:
     sched.add_job(check_daily_schedule, "interval", hours=1)
     sched.add_job(run_fetch_odds, "interval", seconds=settings.odds_poll_interval_seconds)
     sched.add_job(run_capture_closing_lines_task, "interval", minutes=10)
+    sched.add_job(run_update_pick_clv_task, "interval", minutes=5)
     sched.add_job(run_settlement_pipeline_task, "interval", minutes=30)
     sched.add_job(run_model_training_task, "cron", day_of_week="sun", hour=8, minute=0)
     sched.add_job(run_generate_picks_task, "interval", minutes=5)

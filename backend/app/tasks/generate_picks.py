@@ -12,7 +12,13 @@ async def run_generate_picks() -> dict[str, int | str]:
     async with AsyncSessionLocal() as session:
         lock = await session.scalar(text("SELECT pg_try_advisory_lock(:key)"), {"key": ADVISORY_LOCK_KEY})
         if not lock:
-            return {"picks_created": 0, "picks_updated": 0, "generated_at": "", "lock_acquired": 0}
+            return {
+                "picks_created": 0,
+                "picks_updated": 0,
+                "picks_skipped_no_model": 0,
+                "generated_at": "",
+                "lock_acquired": 0,
+            }
         try:
             summary = await generate_picks(session)
             summary["lock_acquired"] = 1
