@@ -220,6 +220,7 @@ async def generate_picks(
                 "data_quality": {"lookback_minutes": lookback_minutes},
             },
             )
+        )
 
         await session.execute(on_conflict)
         key = (c.game.id, c.market, c.side)
