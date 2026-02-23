@@ -70,12 +70,10 @@ export function LineMovementChart({ odds, gameId }: { odds: OddsSnapshot[]; game
         awayOdds: null,
       };
 
-      const mappedSide = resolveHomeAwaySide(snapshot);
-
-      if (mappedSide === "home") {
+      if (snapshot.canonical_side === "home") {
         row.homeOdds = snapshot.odds;
       }
-      if (mappedSide === "away") {
+      if (snapshot.canonical_side === "away") {
         row.awayOdds = snapshot.odds;
       }
 

@@ -7,6 +7,8 @@ export interface Pick {
   commence_time: string;
   market: string;
   side: string;
+  canonical_side: "home" | "away" | null;
+  normalized_team: string;
   line: number | null;
   odds_american: number;
   best_book: string;
@@ -89,6 +91,8 @@ export interface OddsSnapshot {
   bookmaker: string;
   market: string;
   side: string;
+  canonical_side: "home" | "away" | null;
+  normalized_team: string;
   odds: number;
   line: number | null;
   snapshot_time: string;

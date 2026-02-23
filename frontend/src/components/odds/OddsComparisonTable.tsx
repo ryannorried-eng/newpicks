@@ -18,7 +18,7 @@ const MARKET_LABELS: Record<MarketKey, string> = {
 
 function formatOdds(odds: number | null) {
   if (odds === null) {
-    return "-";
+    return "—";
   }
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
@@ -79,12 +79,10 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         line: null,
       };
 
-      const mappedSide = resolveHomeAwaySide(snapshot);
-
-      if (mappedSide === "home" || snapshot.side === "over") {
+      if (snapshot.canonical_side === "home") {
         row.homeOdds = snapshot.odds;
       }
-      if (mappedSide === "away" || snapshot.side === "under") {
+      if (snapshot.canonical_side === "away") {
         row.awayOdds = snapshot.odds;
       }
       if (snapshot.line !== null) {
@@ -150,7 +148,7 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
                       <td className={`p-3 font-mono ${isBestAway ? "font-semibold text-emerald-300" : "text-gray-100"}`}>
                         {formatOdds(row.awayOdds)}
                       </td>
-                      <td className="p-3 text-gray-300">{row.line ?? "-"}</td>
+                      <td className="p-3 text-gray-300">{row.line ?? "—"}</td>
                     </tr>
                   );
                 })}
