@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from app.database import get_session
 from app.models.game import Game
 from app.models.odds_snapshot import OddsSnapshot
-from app.services.odds_normalizer import normalize_team_name, resolve_side
+from app.services.odds_normalizer import format_live_odds_rows
 
 router = APIRouter(prefix="/odds", tags=["odds"])
 
@@ -20,23 +20,4 @@ async def live_odds(session: AsyncSession = Depends(get_session)) -> list[dict]:
             .limit(100)
         )
     ).all()
-    payload: list[dict] = []
-    for snapshot, home_team, away_team in rows:
-        canonical_side = resolve_side(snapshot.side, home_team, away_team, snapshot_id=snapshot.id)
-        payload.append(
-            {
-                "game_id": snapshot.game_id,
-                "home_team": home_team,
-                "away_team": away_team,
-                "sport_key": snapshot.sport_key,
-                "bookmaker": snapshot.bookmaker,
-                "market": snapshot.market,
-                "side": snapshot.side,
-                "canonical_side": canonical_side,
-                "normalized_team": normalize_team_name(snapshot.side),
-                "odds": snapshot.odds,
-                "line": snapshot.line,
-                "snapshot_time": snapshot.snapshot_time.isoformat() if snapshot.snapshot_time else None,
-            }
-        )
-    return payload
+    return format_live_odds_rows(rows)

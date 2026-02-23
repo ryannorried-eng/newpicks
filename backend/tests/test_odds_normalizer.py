@@ -1,33 +1,38 @@
 import logging
 
-import pytest
-
-from app.services.odds_normalizer import resolve_side
+from app.services.odds_normalizer import normalize_team, resolve_side
 
 
-def test_resolve_side_home_literal() -> None:
-    assert resolve_side("home", "Chicago Bulls", "Miami Heat") == "home"
+def test_resolve_side_home_literal():
+    assert resolve_side("home", "Boston Celtics", "Miami Heat") == "home"
 
 
-def test_resolve_side_away_literal_case_insensitive() -> None:
-    assert resolve_side("Away", "Chicago Bulls", "Miami Heat") == "away"
+def test_resolve_side_away_literal():
+    assert resolve_side("away", "Boston Celtics", "Miami Heat") == "away"
 
 
-def test_resolve_side_home_team_exact_match() -> None:
-    assert resolve_side("Chicago Bulls", "Chicago Bulls", "Miami Heat") == "home"
+def test_resolve_side_matches_home_team_case_insensitive():
+    assert resolve_side("boston celtics", "Boston Celtics", "Miami Heat") == "home"
 
 
-def test_resolve_side_home_team_case_insensitive_match() -> None:
-    assert resolve_side("chicago bulls", "Chicago Bulls", "Miami Heat") == "home"
+def test_resolve_side_matches_away_team_case_insensitive():
+    assert resolve_side("MIAMI HEAT", "Boston Celtics", "Miami Heat") == "away"
 
 
-def test_resolve_side_home_team_alias_match() -> None:
-    assert resolve_side("Los Angeles Clippers", "LA Clippers", "Miami Heat") == "home"
+def test_resolve_side_trims_whitespace():
+    assert resolve_side("  Boston Celtics  ", "Boston Celtics", "Miami Heat") == "home"
 
 
-def test_resolve_side_unknown_logs_warning(caplog: pytest.LogCaptureFixture) -> None:
-    with caplog.at_level(logging.WARNING):
-        resolved = resolve_side("???", "Chicago Bulls", "Miami Heat", snapshot_id=99)
+def test_resolve_side_unknown_returns_none_and_logs_warning(caplog):
+    caplog.set_level(logging.WARNING)
 
-    assert resolved is None
-    assert "Could not resolve odds snapshot side" in caplog.text
+    assert resolve_side("draw", "Boston Celtics", "Miami Heat") is None
+    assert "Could not resolve side 'draw'" in caplog.text
+
+
+def test_normalize_team_returns_home_team_for_home_side():
+    assert normalize_team("home", "Boston Celtics", "Miami Heat") == "Boston Celtics"
+
+
+def test_normalize_team_returns_none_for_unknown_side():
+    assert normalize_team("draw", "Boston Celtics", "Miami Heat") is None

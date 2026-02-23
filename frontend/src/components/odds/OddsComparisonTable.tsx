@@ -31,6 +31,10 @@ function isLaterSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnaps
 }
 
 function resolveHomeAwaySide(snapshot: OddsSnapshot): "home" | "away" | null {
+  if (snapshot.canonical_side === "home" || snapshot.canonical_side === "away") {
+    return snapshot.canonical_side;
+  }
+
   const side = snapshot.side.toLowerCase();
   const homeTeam = snapshot.home_team.toLowerCase();
   const awayTeam = snapshot.away_team.toLowerCase();
@@ -56,7 +60,9 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         continue;
       }
 
-      const key = `${market}|${snapshot.bookmaker}|${snapshot.side}`;
+      const mappedSide = resolveHomeAwaySide(snapshot);
+      const sideKey = mappedSide ?? snapshot.side.toLowerCase();
+      const key = `${market}|${snapshot.bookmaker}|${sideKey}`;
       const existing = latestByKey.get(key);
       if (isLaterSnapshot(existing, snapshot)) {
         latestByKey.set(key, snapshot);
@@ -79,10 +85,14 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         line: null,
       };
 
-      if (snapshot.canonical_side === "home") {
+      const mappedSide = resolveHomeAwaySide(snapshot);
+
+      const rawSide = snapshot.side.toLowerCase();
+
+      if (mappedSide === "home" || rawSide === "over") {
         row.homeOdds = snapshot.odds;
       }
-      if (snapshot.canonical_side === "away") {
+      if (mappedSide === "away" || rawSide === "under") {
         row.awayOdds = snapshot.odds;
       }
       if (snapshot.line !== null) {
