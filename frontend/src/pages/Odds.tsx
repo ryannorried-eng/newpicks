@@ -24,7 +24,12 @@ export default function OddsPage() {
     <div className="space-y-4">
       <select className="rounded bg-gray-800 p-2" value={gameId ?? ""} onChange={(e) => setGameId(Number(e.target.value) || null)}>
         <option value="">Select game</option>
-        {games.map((game) => <option key={game.game_id} value={game.game_id}>{game.away_team} @ {game.home_team}</option>)}
+        {games.map((game) => {
+          const awayTeam = game.away_team?.trim();
+          const homeTeam = game.home_team?.trim();
+          const label = awayTeam && homeTeam ? `${awayTeam} @ ${homeTeam}` : `Game ${game.game_id}`;
+          return <option key={game.game_id} value={game.game_id}>{label}</option>;
+        })}
       </select>
       <OddsComparisonTable odds={data} gameId={gameId} />
       <LineMovementChart odds={data} gameId={gameId} />
