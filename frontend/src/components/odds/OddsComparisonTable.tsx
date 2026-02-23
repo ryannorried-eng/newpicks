@@ -7,7 +7,7 @@ type TotalsBucketKey = "over" | "under";
 type BucketKey = TeamBucketKey | TotalsBucketKey | "unknown";
 
 interface BucketValue {
-  odds: number;
+  odds: number | null;
   line: number | null;
 }
 
@@ -42,20 +42,21 @@ function snapshotBucket(snapshot: OddsSnapshot, market: MarketKey): BucketKey {
   return "unknown";
 }
 
-function formatOdds(odds: number) {
+function formatAmericanOdds(odds: number) {
   return odds > 0 ? `+${odds}` : `${odds}`;
 }
 
-function formatBucketCell(value?: BucketValue) {
-  if (!value) {
+function formatBucketCell(row?: BucketValue) {
+  const odds = row?.odds;
+  if (odds == null) {
     return "—";
   }
 
-  if (value.line === null) {
-    return formatOdds(value.odds);
+  if (row?.line === null) {
+    return formatAmericanOdds(odds);
   }
 
-  return `${formatOdds(value.odds)} (${value.line})`;
+  return `${formatAmericanOdds(odds)} (${row?.line})`;
 }
 
 function isLaterSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnapshot) {
