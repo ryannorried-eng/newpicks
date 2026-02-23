@@ -121,6 +121,7 @@ class NBAStatsClient:
 
     def _load_team_stats_cache(self, season: int) -> list[dict[str, Any]]:
         if not os.path.exists(TEAM_STATS_CACHE_PATH):
+            self._logger.info("Team stats cache not found")
             return []
         try:
             with open(TEAM_STATS_CACHE_PATH, "r", encoding="utf-8") as file:
@@ -129,14 +130,17 @@ class NBAStatsClient:
             self._logger.exception("Failed reading team stats cache at %s", TEAM_STATS_CACHE_PATH)
             return []
 
-        seasons_payload = payload.get("seasons") if isinstance(payload, dict) else None
-        if isinstance(seasons_payload, dict):
-            season_payload = seasons_payload.get(str(season), [])
-            if isinstance(season_payload, list):
-                return season_payload
+        if not isinstance(payload, dict):
+            self._logger.info("Team stats cache not found")
+            return []
 
-        fallback = payload.get("team_stats", []) if isinstance(payload, dict) else []
-        return fallback if isinstance(fallback, list) else []
+        cached_stats = [team_stats for team_stats in payload.values() if isinstance(team_stats, dict)]
+        if cached_stats:
+            self._logger.info("Loaded team stats cache with %s teams", len(cached_stats))
+            return cached_stats
+
+        self._logger.info("Team stats cache not found")
+        return []
 
     async def get_team_stats(self, season: int, use_cache: bool = True) -> list[dict]:
         if season in self._season_stats_cache:
@@ -146,9 +150,7 @@ class NBAStatsClient:
             cached_stats = self._load_team_stats_cache(season)
             if cached_stats:
                 self._season_stats_cache[season] = cached_stats
-                self._logger.info("Loaded %s teams from stats cache for season %s", len(cached_stats), season)
                 return cached_stats
-            self._logger.info("No cached team stats found for season %s at %s", season, TEAM_STATS_CACHE_PATH)
             return []
 
         await self._load_teams()
