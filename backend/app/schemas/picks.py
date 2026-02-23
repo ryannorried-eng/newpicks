@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -10,20 +10,41 @@ class PickResponse(BaseModel):
     home_team: str
     away_team: str
     commence_time: datetime
+    pick_day: date | None = None
     market: str
     side: str
     line: float | None
     odds_american: int
     best_book: str
-    fair_prob: float
-    prob_source: str
-    implied_prob: float
-    ev_pct: float
-    composite_score: float
-    confidence_tier: str
-    signals: dict
-    data_quality: dict
-    suggested_kelly_fraction: float
+
+    issued_at: datetime | None = None
+    snapshot_time_open: datetime | None = None
+    model_prob: float | None = None
+    implied_prob_open: float | None = None
+    ev_pct: float | None = None
+    edge: float | None = None
+    consensus_prob: float | None = None
+    book_count: int | None = None
+
+    closing_odds_american: int | None = None
+    closing_line: float | None = None
+    closing_snapshot_time: datetime | None = None
+    clv_prob: float | None = None
+    clv_price: float | None = None
+
+    status: str | None = None
+    result: str | None = None
+    settled_at: datetime | None = None
+    pnl_units: float | None = None
+
+    fair_prob: float | None = None
+    prob_source: str | None = None
+    implied_prob: float | None = None
+    composite_score: float | None = None
+    confidence_tier: str | None = None
+    signals: dict | None = None
+    data_quality: dict | None = None
+    suggested_kelly_fraction: float | None = None
     outcome: str | None
     market_clv: float | None
     book_clv: float | None

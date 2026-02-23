@@ -25,11 +25,28 @@ async def _serialize_pick(session: AsyncSession, pick: Pick) -> PickResponse:
         home_team=game.home_team if game else "",
         away_team=game.away_team if game else "",
         commence_time=game.commence_time if game else pick.created_at,
+        pick_day=pick.pick_day,
         market=pick.market,
         side=pick.side,
         line=pick.line,
         odds_american=pick.odds_american,
         best_book=pick.best_book,
+        issued_at=pick.issued_at,
+        snapshot_time_open=pick.snapshot_time_open,
+        model_prob=pick.model_prob,
+        implied_prob_open=pick.implied_prob_open,
+        edge=pick.edge,
+        consensus_prob=pick.consensus_prob,
+        book_count=pick.book_count,
+        closing_odds_american=pick.closing_odds_american,
+        closing_line=pick.closing_line,
+        closing_snapshot_time=pick.closing_snapshot_time,
+        clv_prob=pick.clv_prob,
+        clv_price=pick.clv_price,
+        status=pick.status,
+        result=pick.result,
+        settled_at=pick.settled_at,
+        pnl_units=pick.pnl_units,
         fair_prob=pick.fair_prob,
         prob_source=pick.prob_source,
         implied_prob=pick.implied_prob,
@@ -47,11 +64,23 @@ async def _serialize_pick(session: AsyncSession, pick: Pick) -> PickResponse:
 
 
 @router.post("/generate")
-async def trigger_generate_picks() -> dict[str, int]:
-    created = await run_generate_picks()
-    if created > 0:
+async def trigger_generate_picks() -> dict[str, int | str]:
+    summary = await run_generate_picks()
+    if int(summary.get("picks_created", 0)) > 0:
         await run_generate_parlays()
-    return {"generated": created}
+    return summary
+
+
+@router.get("/live", response_model=list[PickResponse])
+async def get_live_picks(session: AsyncSession = Depends(get_session)) -> list[PickResponse]:
+    now = datetime.now(UTC)
+    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    picks = (
+        await session.scalars(
+            select(Pick).where(Pick.pick_date >= start).order_by(Pick.ev_pct.desc())
+        )
+    ).all()
+    return [await _serialize_pick(session, p) for p in picks]
 
 
 @router.get("/today", response_model=list[PickResponse])
