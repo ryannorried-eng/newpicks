@@ -49,8 +49,10 @@ async def sync_sports(client: OddsAPIClient, session: AsyncSession) -> None:
     await session.commit()
 
 
-async def fetch_odds_adaptive(client: OddsAPIClient, session: AsyncSession) -> None:
+async def fetch_odds_adaptive(client: OddsAPIClient, session: AsyncSession) -> tuple[int, int]:
     sports: list[Sport] = list((await session.scalars(select(Sport).where(Sport.active.is_(True)))).all())
+    total_games = 0
+    total_snapshots = 0
     for sport in sports:
         if sport.key not in SUPPORTED_GAME_SPORTS:
             continue
@@ -60,11 +62,14 @@ async def fetch_odds_adaptive(client: OddsAPIClient, session: AsyncSession) -> N
             logger.exception("Failed to fetch odds for sport %s", sport.key)
             continue
         scheduler.update_quota(result.requests_remaining)
-        await _store_odds_payload(session, sport.id, sport.key, result.data)
+        total_games += len(result.data)
+        total_snapshots += await _store_odds_payload(session, sport.id, sport.key, result.data)
+    return total_games, total_snapshots
 
 
-async def _store_odds_payload(session: AsyncSession, sport_id: int, sport_key: str, payload: list[dict]) -> None:
+async def _store_odds_payload(session: AsyncSession, sport_id: int, sport_key: str, payload: list[dict]) -> int:
     now = datetime.now(UTC)
+    inserted = 0
     for game_data in payload:
         commence = datetime.fromisoformat(game_data["commence_time"].replace("Z", "+00:00"))
         game = await session.scalar(select(Game).where(Game.external_id == game_data["id"]))
@@ -121,4 +126,6 @@ async def _store_odds_payload(session: AsyncSession, sport_id: int, sport_key: s
                         is_closing=now >= (commence.replace(tzinfo=UTC) if commence.tzinfo is None else commence),
                     )
                     session.add(snapshot)
+                    inserted += 1
     await session.commit()
+    return inserted

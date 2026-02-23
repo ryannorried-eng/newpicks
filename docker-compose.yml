@@ -40,8 +40,6 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      backend:
-        condition: service_started
     command: bash -lc "python -m app.worker"
     volumes:
       - model-data:/app/models
