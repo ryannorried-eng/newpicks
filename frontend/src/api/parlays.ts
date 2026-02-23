@@ -1,5 +1,5 @@
 import client from "./client";
-import type { Parlay } from "../types";
+import type { Parlay, ParlayBuildResponse } from "../types";
 
 export const fetchParlaysToday = async (): Promise<Parlay[]> => {
   const response = await client.get<Parlay[]>("/parlays/today");
@@ -11,7 +11,7 @@ export const generateParlays = async (): Promise<Parlay[]> => {
   return response.data;
 };
 
-export const buildParlay = async (pickIds: number[]): Promise<Parlay> => {
-  const response = await client.post<Parlay>("/parlays/build", { pick_ids: pickIds });
+export const buildParlay = async (pickIds: number[]): Promise<ParlayBuildResponse> => {
+  const response = await client.post<ParlayBuildResponse>("/parlays/build", { pick_ids: pickIds });
   return response.data;
 };
