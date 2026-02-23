@@ -24,7 +24,11 @@ export default function ParlaysPage() {
         <h3 className="mb-3 text-lg">Interactive Builder</h3>
         <div className="space-y-2">{picks.map((pick) => <label key={pick.id} className="flex items-center gap-2 text-sm"><input type="checkbox" checked={selected.includes(pick.id)} onChange={(e) => setSelected((prev) => e.target.checked ? [...prev, pick.id] : prev.filter((id) => id !== pick.id))} />{pick.away_team} @ {pick.home_team} — {pick.side}</label>)}</div>
         <button className="mt-3 rounded bg-emerald-600 px-3 py-2 text-sm" onClick={() => build.mutate(selected)}>Analyze Parlay</button>
-        {build.data && <p className="mt-2 text-sm text-emerald-400">Combined EV: +{build.data.combined_ev_pct.toFixed(2)}% · Correlation: {build.data.correlation_score.toFixed(2)}</p>}
+        {build.data && (
+          <p className="mt-2 text-sm text-emerald-400">
+            Combined EV: {build.data.combined_ev_pct != null ? `+${build.data.combined_ev_pct.toFixed(2)}%` : "N/A"} · Correlation: {build.data.correlation_score != null ? build.data.correlation_score.toFixed(2) : "N/A"}
+          </p>
+        )}
       </section>
     </div>
   );
