@@ -33,7 +33,26 @@ function isTeamMarket(market: string): boolean {
 
 function snapshotBucket(snapshot: OddsSnapshot, market: MarketKey): BucketKey {
   if (isTeamMarket(market)) {
-    return snapshot.canonical_side ?? "unknown";
+    if (snapshot.canonical_side) {
+      return snapshot.canonical_side;
+    }
+
+    const side = norm(snapshot.side);
+    if (side === "home" || side === "away") {
+      return side;
+    }
+
+    const normalizedTeam = norm(snapshot.normalized_team);
+    if (normalizedTeam) {
+      if (normalizedTeam === norm(snapshot.home_team)) {
+        return "home";
+      }
+      if (normalizedTeam === norm(snapshot.away_team)) {
+        return "away";
+      }
+    }
+
+    return "unknown";
   }
   const side = norm(snapshot.side);
   if (side === "over" || side === "under") {
