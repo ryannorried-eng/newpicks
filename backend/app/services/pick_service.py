@@ -1,227 +1,202 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, delete, select
+from sqlalchemy import and_, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.analytics.confidence import ConfidenceTier, assign_confidence
-from app.analytics.consensus import calculate_consensus
-from app.analytics.data_quality import assess_game_quality, data_quality_to_dict
-from app.analytics.ev_calculator import calculate_pick_ev
-from app.analytics.line_movement import (
-    detect_reverse_line_movement,
-    detect_steam_move,
-    get_opening_to_current_change,
-)
-from app.analytics.sharp_signals import score_signals, signal_to_dict
-from app.data_providers.nba_stats import NBAStatsClient
-from app.ml.features import build_game_features, features_to_array
-from app.ml.model import predictor
 from app.models.game import Game
 from app.models.odds_snapshot import OddsSnapshot
 from app.models.pick import Pick
-from app.utils.odds_math import american_to_decimal, kelly_criterion
+from app.models.sport import Sport
+from app.utils.odds_math import american_to_decimal, american_to_implied_prob, kelly_criterion
 
 logger = logging.getLogger(__name__)
 MARKETS = ("h2h", "spreads", "totals")
+DEFAULT_TOP_N = 3
+DEFAULT_LOOKBACK_MINUTES = 60
 
 
-async def generate_consensus_picks(session: AsyncSession, games: list[Game], today_start: datetime) -> list[Pick]:
-    generated: list[Pick] = []
-    for game in games:
-        snapshots = (
-            await session.scalars(
-                select(OddsSnapshot).where(OddsSnapshot.game_id == game.id).order_by(OddsSnapshot.snapshot_time.asc())
+@dataclass(slots=True)
+class PickCandidate:
+    game_id: int
+    sport_key: str
+    market: str
+    side: str
+    line: float | None
+    best_book: str
+    best_odds: int
+    best_implied_prob: float
+    consensus_prob: float
+    edge: float
+
+
+def _probability_for_snapshot(snapshot: OddsSnapshot) -> float:
+    no_vig = getattr(snapshot, "no_vig_prob", None)
+    if no_vig is not None and no_vig > 0:
+        return no_vig
+    return american_to_implied_prob(snapshot.odds)
+
+
+def compute_edge(consensus_prob: float, best_price_implied_prob: float) -> float:
+    return consensus_prob - best_price_implied_prob
+
+
+async def generate_picks(
+    session: AsyncSession,
+    *,
+    lookback_minutes: int = DEFAULT_LOOKBACK_MINUTES,
+    top_n_per_sport_market: int = DEFAULT_TOP_N,
+) -> dict[str, int | str]:
+    now = datetime.now(UTC)
+    since = now - timedelta(minutes=lookback_minutes)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    latest_snapshot_time = await session.scalar(
+        select(func.max(OddsSnapshot.snapshot_time)).where(OddsSnapshot.snapshot_time >= since)
+    )
+    if latest_snapshot_time is None:
+        logger.info("pick generation skipped: no odds snapshots in lookback window")
+        return {"picks_created": 0, "picks_updated": 0, "generated_at": now.isoformat()}
+
+    latest_rows = (
+        await session.scalars(
+            select(OddsSnapshot)
+            .where(and_(OddsSnapshot.snapshot_time >= since, OddsSnapshot.market.in_(MARKETS)))
+            .order_by(
+                OddsSnapshot.game_id,
+                OddsSnapshot.market,
+                OddsSnapshot.side,
+                OddsSnapshot.bookmaker,
+                OddsSnapshot.snapshot_time.desc(),
             )
-        ).all()
-        if not snapshots:
+        )
+    ).all()
+
+    latest_by_book: dict[tuple[int, str, str, str], OddsSnapshot] = {}
+    for row in latest_rows:
+        key = (row.game_id, row.market, row.side, row.bookmaker)
+        if key not in latest_by_book:
+            latest_by_book[key] = row
+
+    grouped_by_side: dict[tuple[int, str, str], list[OddsSnapshot]] = defaultdict(list)
+    for row in latest_by_book.values():
+        grouped_by_side[(row.game_id, row.market, row.side)].append(row)
+
+    candidates: list[PickCandidate] = []
+    for (game_id, market, side), rows in grouped_by_side.items():
+        if not rows:
             continue
 
-        dq = assess_game_quality(game.id, snapshots)
-        for market in MARKETS:
-            consensus = calculate_consensus(snapshots, market)
-            for side, side_data in consensus.items():
-                ev = calculate_pick_ev(side_data["fair_prob"], side_data["best_odds"])
-                steam = detect_steam_move(game.id, market, side, snapshots)
-                rlm = detect_reverse_line_movement(game.id, market, side, snapshots)
-                change = get_opening_to_current_change(game.id, market, side, snapshots)
+        probs = [_probability_for_snapshot(row) for row in rows]
+        consensus_prob = sum(probs) / len(probs)
 
-                signals = score_signals(
-                    ev_pct=ev["ev_pct"],
-                    steam=steam,
-                    rlm=rlm,
-                    opening_odds=change["opening_odds"],
-                    current_odds=change["current_odds"],
-                    is_outlier_book=side_data["is_outlier"],
-                    data_quality=dq,
-                )
+        best_row = max(rows, key=lambda row: american_to_decimal(row.odds))
+        best_implied_prob = american_to_implied_prob(best_row.odds)
+        edge = compute_edge(consensus_prob, best_implied_prob)
+        if edge <= 0:
+            continue
 
-                signals_firing = int(signals.ev_positive + signals.steam_move + signals.reverse_line_movement + signals.best_line_available + signals.consensus_deviation)
-                tier = assign_confidence(signals.composite, ev["ev_pct"], signals_firing, dq)
-                if tier == ConfidenceTier.FILTERED:
-                    continue
+        candidates.append(
+            PickCandidate(
+                game_id=game_id,
+                sport_key=best_row.sport_key,
+                market=market,
+                side=side,
+                line=best_row.line,
+                best_book=best_row.bookmaker,
+                best_odds=best_row.odds,
+                best_implied_prob=best_implied_prob,
+                consensus_prob=consensus_prob,
+                edge=edge,
+            )
+        )
 
-                dec_odds = american_to_decimal(side_data["best_odds"])
-                kelly = kelly_criterion(ev["fair_prob"], dec_odds)
-                latest_for_side = [s for s in snapshots if s.market == market and s.side == side]
-                line = latest_for_side[-1].line if latest_for_side else None
+    if not candidates:
+        await session.execute(delete(Pick).where(Pick.pick_date >= today_start))
+        await session.commit()
+        logger.info("pick generation complete: picks_created=0 picks_updated=0")
+        return {"picks_created": 0, "picks_updated": 0, "generated_at": now.isoformat()}
 
-                generated.append(
-                    Pick(
-                        game_id=game.id,
-                        sport_key=snapshots[-1].sport_key,
-                        pick_date=today_start,
-                        market=market,
-                        side=side,
-                        line=line,
-                        odds_american=side_data["best_odds"],
-                        best_book=side_data["best_book"] or "unknown",
-                        fair_prob=ev["fair_prob"],
-                        prob_source="consensus",
-                        implied_prob=ev["implied_prob_at_best_odds"],
-                        ev_pct=ev["ev_pct"],
-                        composite_score=signals.composite,
-                        confidence_tier=tier.value,
-                        signals=signal_to_dict(signals),
-                        data_quality=data_quality_to_dict(dq),
-                        suggested_kelly_fraction=kelly,
-                    )
-                )
-    return generated
-
-
-async def generate_model_picks(session: AsyncSession, games: list[Game], today_start: datetime) -> list[Pick]:
-    if not predictor.is_trained:
-        return []
-
-    generated: list[Pick] = []
-    nba_client = NBAStatsClient()
-    seasons = {
-        g.commence_time.year - 1 if g.commence_time.month < 10 else g.commence_time.year
-        for g in games
+    game_map = {
+        game.id: game
+        for game in (
+            await session.scalars(select(Game).where(Game.id.in_({candidate.game_id for candidate in candidates})))
+        ).all()
     }
-    for season in seasons:
-        if not await nba_client.get_team_stats(season, use_cache=True):
-            logger.info("Skipping model picks: missing cached team stats for season %s", season)
-            return []
+    sport_map = {
+        sport.id: sport.key
+        for sport in (
+            await session.scalars(select(Sport)).all()
+        )
+    }
 
-    for game in games:
-        snapshots = (
-            await session.scalars(
-                select(OddsSnapshot).where(OddsSnapshot.game_id == game.id).order_by(OddsSnapshot.snapshot_time.asc())
+    selected: list[PickCandidate] = []
+    by_sport_market: dict[tuple[str, str], list[PickCandidate]] = defaultdict(list)
+    for candidate in candidates:
+        by_sport_market[(candidate.sport_key, candidate.market)].append(candidate)
+
+    for key, bucket in by_sport_market.items():
+        ranked = sorted(bucket, key=lambda item: item.edge, reverse=True)
+        selected.extend(ranked[:top_n_per_sport_market])
+        logger.info(
+            "pick generation bucket: sport=%s market=%s selected=%s available=%s",
+            key[0],
+            key[1],
+            min(top_n_per_sport_market, len(ranked)),
+            len(ranked),
+        )
+
+    await session.execute(delete(Pick).where(Pick.pick_date >= today_start))
+
+    picks_to_insert: list[Pick] = []
+    for candidate in selected:
+        game = game_map.get(candidate.game_id)
+        sport_key = candidate.sport_key
+        if game is not None:
+            sport_key = sport_map.get(game.sport_id, sport_key)
+
+        dec_odds = american_to_decimal(candidate.best_odds)
+        kelly = kelly_criterion(candidate.consensus_prob, dec_odds)
+        picks_to_insert.append(
+            Pick(
+                game_id=candidate.game_id,
+                sport_key=sport_key,
+                pick_date=today_start,
+                market=candidate.market,
+                side=candidate.side,
+                line=candidate.line,
+                odds_american=candidate.best_odds,
+                best_book=candidate.best_book,
+                fair_prob=candidate.consensus_prob,
+                prob_source="consensus",
+                implied_prob=candidate.best_implied_prob,
+                ev_pct=candidate.edge,
+                composite_score=candidate.edge * 100,
+                confidence_tier="medium" if candidate.edge < 0.03 else "high",
+                signals={"edge": candidate.edge, "books_in_consensus": len(grouped_by_side[(candidate.game_id, candidate.market, candidate.side)])},
+                data_quality={"latest_snapshot_time": latest_snapshot_time.isoformat(), "lookback_minutes": lookback_minutes},
+                suggested_kelly_fraction=kelly,
             )
-        ).all()
-        if not snapshots:
-            continue
-        if snapshots[-1].sport_key != "basketball_nba":
-            continue
+        )
 
-        dq = assess_game_quality(game.id, snapshots)
-        consensus = calculate_consensus(snapshots, "h2h")
-        if not consensus:
-            continue
+    session.add_all(picks_to_insert)
+    await session.commit()
 
-        try:
-            feats = await build_game_features(game.home_team, game.away_team, game.commence_time.date(), nba_client)
-            home_model_prob = predictor.predict_home_win_prob(features_to_array(feats))
-        except Exception as exc:
-            logger.warning("Skipping model pick for %s vs %s: %s", game.home_team, game.away_team, exc)
-            continue
-
-        sides = {
-            game.home_team: home_model_prob,
-            game.away_team: 1 - home_model_prob,
-        }
-
-        for side, model_prob in sides.items():
-            side_data = consensus.get(side.lower())
-            if not side_data:
-                continue
-            market_prob = side_data["fair_prob"]
-            disagreement = abs(model_prob - market_prob)
-            if disagreement < 0.03:
-                continue
-
-            ev = calculate_pick_ev(model_prob, side_data["best_odds"])
-            if ev["ev_pct"] <= 0.01:
-                continue
-
-            steam = detect_steam_move(game.id, "h2h", side, snapshots)
-            rlm = detect_reverse_line_movement(game.id, "h2h", side, snapshots)
-            change = get_opening_to_current_change(game.id, "h2h", side, snapshots)
-            signals = score_signals(
-                ev_pct=ev["ev_pct"],
-                steam=steam,
-                rlm=rlm,
-                opening_odds=change["opening_odds"],
-                current_odds=change["current_odds"],
-                is_outlier_book=side_data["is_outlier"],
-                data_quality=dq,
-            )
-            signals_firing = int(signals.ev_positive + signals.steam_move + signals.reverse_line_movement + signals.best_line_available + signals.consensus_deviation)
-            tier = assign_confidence(signals.composite, ev["ev_pct"], signals_firing, dq)
-            if tier == ConfidenceTier.FILTERED:
-                continue
-
-            dec_odds = american_to_decimal(side_data["best_odds"])
-            kelly = kelly_criterion(model_prob, dec_odds)
-            latest_for_side = [s for s in snapshots if s.market == "h2h" and s.side == side]
-            line = latest_for_side[-1].line if latest_for_side else None
-
-            generated.append(
-                Pick(
-                    game_id=game.id,
-                    sport_key=snapshots[-1].sport_key,
-                    pick_date=today_start,
-                    market="h2h",
-                    side=side,
-                    line=line,
-                    odds_american=side_data["best_odds"],
-                    best_book=side_data["best_book"] or "unknown",
-                    fair_prob=model_prob,
-                    prob_source="model_v1",
-                    implied_prob=ev["implied_prob_at_best_odds"],
-                    ev_pct=ev["ev_pct"],
-                    composite_score=signals.composite,
-                    confidence_tier=tier.value,
-                    signals=signal_to_dict(signals),
-                    data_quality=data_quality_to_dict(dq),
-                    suggested_kelly_fraction=kelly,
-                )
-            )
-
-    return generated
+    picks_created = len(picks_to_insert)
+    logger.info("pick generation complete: picks_created=%s picks_updated=0", picks_created)
+    return {"picks_created": picks_created, "picks_updated": 0, "generated_at": now.isoformat()}
 
 
 async def generate_daily_picks(session: AsyncSession) -> list[Pick]:
-    now = datetime.now(UTC)
-    window_end = now + timedelta(hours=24)
-
-    games = (
-        await session.scalars(
-            select(Game).where(and_(Game.commence_time >= now, Game.commence_time <= window_end)).order_by(Game.commence_time)
-        )
-    ).all()
-    if not games:
+    summary = await generate_picks(session)
+    if summary["picks_created"] == 0:
         return []
-
+    now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    await session.execute(delete(Pick).where(Pick.pick_date >= today_start))
-
-    consensus_picks = await generate_consensus_picks(session, games, today_start)
-    model_picks = await generate_model_picks(session, games, today_start)
-
-    deduped: dict[tuple[int, str, str], Pick] = {}
-    for pick in [*consensus_picks, *model_picks]:
-        key = (pick.game_id, pick.market, pick.side)
-        existing = deduped.get(key)
-        if existing is None or pick.ev_pct > existing.ev_pct:
-            deduped[key] = pick
-
-    merged = sorted(deduped.values(), key=lambda p: p.ev_pct, reverse=True)
-    top_picks = merged[:10]
-    session.add_all(top_picks)
-    await session.commit()
-    return top_picks
+    return (
+        await session.scalars(select(Pick).where(Pick.pick_date >= today_start).order_by(Pick.ev_pct.desc()))
+    ).all()
