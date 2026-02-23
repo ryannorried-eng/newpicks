@@ -10,13 +10,19 @@ const SPORT_LABELS: Record<string, string> = {
   americanfootball_ncaaf: "NCAAF",
 };
 
+const SPORT_TABS = ["basketball_nba", "basketball_ncaab", "icehockey_nhl", "americanfootball_ncaaf"];
+
 export default function OddsPage() {
   const { data = [] } = useLiveOdds();
   const [sport, setSport] = useState<string>("all");
   const [gameId, setGameId] = useState<number | null>(null);
 
-  const sports = useMemo(() => {
-    return Array.from(new Set(data.map((snapshot) => snapshot.sport_key))).sort((a, b) => a.localeCompare(b));
+  const sportSnapshotCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const snapshot of data) {
+      counts.set(snapshot.sport_key, (counts.get(snapshot.sport_key) ?? 0) + 1);
+    }
+    return counts;
   }, [data]);
 
   const games = useMemo(() => {
@@ -53,15 +59,22 @@ export default function OddsPage() {
         >
           All
         </button>
-        {sports.map((sportKey) => (
+        {SPORT_TABS.map((sportKey) => (
           <button
             key={sportKey}
             type="button"
+            disabled={!sportSnapshotCounts.get(sportKey)}
             onClick={() => {
               setSport(sportKey);
               setGameId(null);
             }}
-            className={`rounded-lg px-3 py-2 text-sm ${sport === sportKey ? "bg-amber-500/20 text-amber-300" : "bg-gray-900 text-gray-400"}`}
+            className={`rounded-lg px-3 py-2 text-sm transition-colors ${
+              !sportSnapshotCounts.get(sportKey)
+                ? "cursor-not-allowed bg-gray-900/60 text-gray-600"
+                : sport === sportKey
+                  ? "bg-amber-500/20 text-amber-300"
+                  : "bg-gray-900 text-gray-400 hover:text-gray-200"
+            }`}
           >
             {SPORT_LABELS[sportKey] ?? sportKey}
           </button>
