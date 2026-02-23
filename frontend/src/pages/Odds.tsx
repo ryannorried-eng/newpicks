@@ -82,12 +82,14 @@ export default function OddsPage() {
     return Array.from(byGameKey.values());
   }, [filteredRows]);
 
-  console.debug("[OddsPage] rows debug", {
-    rawRows: rawRows.length,
-    filteredRows: filteredRows.length,
-    games: games.length,
-    selectedSport: sport,
-  });
+  if (import.meta.env.DEV) {
+    console.debug("[OddsPage] rows debug", {
+      rawRows: rawRows.length,
+      filteredRows: filteredRows.length,
+      games: games.length,
+      selectedSport: sport,
+    });
+  }
 
   return (
     <div className="space-y-4">
