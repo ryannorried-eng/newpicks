@@ -71,6 +71,8 @@ export interface Parlay {
 
 export interface OddsSnapshot {
   game_id: number;
+  home_team: string;
+  away_team: string;
   sport_key: string;
   bookmaker: string;
   market: string;
