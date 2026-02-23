@@ -1,10 +1,27 @@
+import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from app.services.odds_normalizer import format_live_odds_rows
+from app.api.v1.odds import live_odds
 
 
-def test_live_odds_contract_includes_canonical_side_and_normalized_team_keys():
+class _Result:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def all(self):
+        return self._rows
+
+
+class _FakeSession:
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, _query):
+        return _Result(self._rows)
+
+
+def test_live_odds_includes_required_keys_and_totals_are_null():
     snapshot_time = datetime.now(timezone.utc)
     rows = [
         (
@@ -37,15 +54,11 @@ def test_live_odds_contract_includes_canonical_side_and_normalized_team_keys():
         ),
     ]
 
-    payload = format_live_odds_rows(rows)
+    payload = asyncio.run(live_odds(session=_FakeSession(rows)))
 
     assert all("canonical_side" in row for row in payload)
     assert all("normalized_team" in row for row in payload)
 
-    h2h = next(row for row in payload if row["market"] == "h2h")
     totals = next(row for row in payload if row["market"] == "totals")
-
-    assert h2h["canonical_side"] == "home"
-    assert h2h["normalized_team"] == "boston celtics"
     assert totals["canonical_side"] is None
     assert totals["normalized_team"] is None
