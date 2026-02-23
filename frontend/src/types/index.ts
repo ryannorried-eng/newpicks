@@ -8,7 +8,7 @@ export interface Pick {
   market: string;
   side: string;
   canonical_side: "home" | "away" | null;
-  normalized_team: string;
+  normalized_team: string | null;
   line: number | null;
   odds_american: number;
   best_book: string;

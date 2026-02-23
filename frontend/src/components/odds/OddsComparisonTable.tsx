@@ -2,12 +2,16 @@ import { Fragment, useMemo } from "react";
 import type { OddsSnapshot } from "../../types";
 
 type MarketKey = "h2h" | "spreads" | "totals";
+type BucketKey = "home" | "away" | "over" | "under" | "unknown";
+
+interface BucketValue {
+  odds: number;
+  line: number | null;
+}
 
 interface BookRow {
   bookmaker: string;
-  homeOdds: number | null;
-  awayOdds: number | null;
-  line: number | null;
+  buckets: Partial<Record<BucketKey, BucketValue>>;
 }
 
 const MARKET_LABELS: Record<MarketKey, string> = {
@@ -16,11 +20,32 @@ const MARKET_LABELS: Record<MarketKey, string> = {
   totals: "Total",
 };
 
-function formatOdds(odds: number | null) {
-  if (odds === null) {
+function norm(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
+function isTeamMarket(market: string): boolean {
+  return market === "h2h" || market === "spreads";
+}
+
+function isTotalsMarket(market: string): boolean {
+  return market === "totals";
+}
+
+function formatOdds(odds: number) {
+  return odds > 0 ? `+${odds}` : `${odds}`;
+}
+
+function formatBucketCell(value?: BucketValue) {
+  if (!value) {
     return "—";
   }
-  return odds > 0 ? `+${odds}` : `${odds}`;
+
+  if (value.line === null) {
+    return formatOdds(value.odds);
+  }
+
+  return `${formatOdds(value.odds)} (${value.line})`;
 }
 
 function isLaterSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnapshot) {
@@ -28,25 +53,6 @@ function isLaterSnapshot(current: OddsSnapshot | undefined, candidate: OddsSnaps
     return true;
   }
   return new Date(candidate.snapshot_time).getTime() > new Date(current.snapshot_time).getTime();
-}
-
-function resolveHomeAwaySide(snapshot: OddsSnapshot): "home" | "away" | null {
-  if (snapshot.canonical_side === "home" || snapshot.canonical_side === "away") {
-    return snapshot.canonical_side;
-  }
-
-  const side = snapshot.side.toLowerCase();
-  const homeTeam = snapshot.home_team.toLowerCase();
-  const awayTeam = snapshot.away_team.toLowerCase();
-
-  if (side === "home" || side === homeTeam) {
-    return "home";
-  }
-  if (side === "away" || side === awayTeam) {
-    return "away";
-  }
-
-  return null;
 }
 
 export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; gameId: number | null }) {
@@ -60,9 +66,13 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         continue;
       }
 
-      const mappedSide = resolveHomeAwaySide(snapshot);
-      const sideKey = mappedSide ?? snapshot.side.toLowerCase();
-      const key = `${market}|${snapshot.bookmaker}|${sideKey}`;
+      const bucket: BucketKey = isTeamMarket(market)
+        ? (snapshot.canonical_side ?? "unknown")
+        : isTotalsMarket(market)
+          ? ((norm(snapshot.side) as BucketKey) || "unknown")
+          : "unknown";
+      const baseKey = `${snapshot.game_id}|${snapshot.bookmaker}|${market}`;
+      const key = `${baseKey}|${bucket}`;
       const existing = latestByKey.get(key);
       if (isLaterSnapshot(existing, snapshot)) {
         latestByKey.set(key, snapshot);
@@ -80,24 +90,19 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
       const rowsByBook = markets.get(market)!;
       const row = rowsByBook.get(snapshot.bookmaker) ?? {
         bookmaker: snapshot.bookmaker,
-        homeOdds: null,
-        awayOdds: null,
-        line: null,
+        buckets: {},
       };
 
-      const mappedSide = resolveHomeAwaySide(snapshot);
+      const bucket: BucketKey = isTeamMarket(market)
+        ? (snapshot.canonical_side ?? "unknown")
+        : isTotalsMarket(market)
+          ? ((norm(snapshot.side) as BucketKey) || "unknown")
+          : "unknown";
 
-      const rawSide = snapshot.side.toLowerCase();
-
-      if (mappedSide === "home" || rawSide === "over") {
-        row.homeOdds = snapshot.odds;
-      }
-      if (mappedSide === "away" || rawSide === "under") {
-        row.awayOdds = snapshot.odds;
-      }
-      if (snapshot.line !== null) {
-        row.line = snapshot.line;
-      }
+      row.buckets[bucket] = {
+        odds: snapshot.odds,
+        line: snapshot.line,
+      };
 
       rowsByBook.set(snapshot.bookmaker, row);
     }
@@ -105,15 +110,25 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
     return (Object.keys(MARKET_LABELS) as MarketKey[])
       .map((market) => {
         const rows = Array.from(markets.get(market)?.values() ?? []).sort((a, b) => a.bookmaker.localeCompare(b.bookmaker));
-        const bestHome = Math.max(...rows.map((row) => row.homeOdds ?? Number.NEGATIVE_INFINITY));
-        const bestAway = Math.max(...rows.map((row) => row.awayOdds ?? Number.NEGATIVE_INFINITY));
+        const firstBucket: BucketKey = isTeamMarket(market) ? "home" : "over";
+        const secondBucket: BucketKey = isTeamMarket(market) ? "away" : "under";
+        const bestFirst = Math.max(
+          ...rows.map((row) => row.buckets[firstBucket]?.odds ?? Number.NEGATIVE_INFINITY),
+        );
+        const bestSecond = Math.max(
+          ...rows.map((row) => row.buckets[secondBucket]?.odds ?? Number.NEGATIVE_INFINITY),
+        );
 
         return {
           market,
           label: MARKET_LABELS[market],
+          firstHeader: isTeamMarket(market) ? "Home" : "Over",
+          secondHeader: isTeamMarket(market) ? "Away" : "Under",
+          firstBucket,
+          secondBucket,
           rows,
-          bestHome,
-          bestAway,
+          bestFirst,
+          bestSecond,
         };
       })
       .filter((group) => group.rows.length > 0);
@@ -125,15 +140,14 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
         <thead className="bg-gray-950 text-gray-400">
           <tr>
             <th className="p-3 text-left">Bookmaker</th>
-            <th className="p-3 text-left">Home Odds</th>
-            <th className="p-3 text-left">Away Odds</th>
-            <th className="p-3 text-left">Line</th>
+            <th className="p-3 text-left">Side A</th>
+            <th className="p-3 text-left">Side B</th>
           </tr>
         </thead>
         <tbody>
           {marketGroups.length === 0 ? (
             <tr className="border-t border-gray-800">
-              <td className="p-3 text-gray-500" colSpan={4}>
+              <td className="p-3 text-gray-500" colSpan={3}>
                 Select a game to view odds.
               </td>
             </tr>
@@ -141,24 +155,25 @@ export function OddsComparisonTable({ odds, gameId }: { odds: OddsSnapshot[]; ga
             marketGroups.map((group) => (
               <Fragment key={group.market}>
                 <tr className="border-t border-gray-800 bg-gray-950/50">
-                  <td className="p-3 font-semibold text-gray-200" colSpan={4}>
-                    {group.label}
-                  </td>
+                  <td className="p-3 font-semibold text-gray-200">{group.label}</td>
+                  <td className="p-3 font-semibold text-gray-300">{group.firstHeader}</td>
+                  <td className="p-3 font-semibold text-gray-300">{group.secondHeader}</td>
                 </tr>
                 {group.rows.map((row) => {
-                  const isBestHome = row.homeOdds !== null && row.homeOdds === group.bestHome;
-                  const isBestAway = row.awayOdds !== null && row.awayOdds === group.bestAway;
+                  const first = row.buckets[group.firstBucket];
+                  const second = row.buckets[group.secondBucket];
+                  const isBestFirst = first?.odds !== undefined && first.odds === group.bestFirst;
+                  const isBestSecond = second?.odds !== undefined && second.odds === group.bestSecond;
 
                   return (
                     <tr key={`${group.market}-${row.bookmaker}`} className="border-t border-gray-800">
                       <td className="p-3">{row.bookmaker}</td>
-                      <td className={`p-3 font-mono ${isBestHome ? "font-semibold text-amber-300" : "text-gray-100"}`}>
-                        {formatOdds(row.homeOdds)}
+                      <td className={`p-3 font-mono ${isBestFirst ? "font-semibold text-amber-300" : "text-gray-100"}`}>
+                        {formatBucketCell(first)}
                       </td>
-                      <td className={`p-3 font-mono ${isBestAway ? "font-semibold text-emerald-300" : "text-gray-100"}`}>
-                        {formatOdds(row.awayOdds)}
+                      <td className={`p-3 font-mono ${isBestSecond ? "font-semibold text-emerald-300" : "text-gray-100"}`}>
+                        {formatBucketCell(second)}
                       </td>
-                      <td className="p-3 text-gray-300">{row.line ?? "—"}</td>
                     </tr>
                   );
                 })}
